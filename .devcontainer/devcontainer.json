@@ -1,0 +1,19 @@
+{
+    "name": "PyTorch ROCm Dev",
+    "build": {
+        "dockerfile": "../Dockerfile"
+    },
+    "runArgs": [
+      "--device=/dev/kfd",
+      "--device=/dev/dri",
+      "--group-add=video",
+      "--cap-add=SYS_PTRACE",
+      "--security-opt=seccomp=unconfined"
+    ],
+    "workspaceFolder": "/workspace",
+    "mounts": [
+      "source=${localWorkspaceFolder},target=/workspace,type=bind"
+    ],
+    "remoteUser": "root",
+    "postCreateCommand": "echo Hello from base config"
+  }
