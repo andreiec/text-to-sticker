@@ -3,7 +3,7 @@ data/emoji_dataset_*
 
 # Outputs
 samples/epoch_*.png
-!samples/epoch_0000.png
+!samples/epoch.png
 
 # Jupyter
 .ipynb_checkpoints/

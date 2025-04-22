@@ -12,8 +12,8 @@
     ],
     "workspaceFolder": "/workspace",
     "mounts": [
-      "source=${localWorkspaceFolder},target=/workspace,type=bind"
+      "source=${localWorkspaceFolder},target=/workspace,type=bind",
+      "source=${env:HOME}/.gitconfig,target=/root/.gitconfig,type=bind,consistency=cached"
     ],
-    "remoteUser": "root",
-    "postCreateCommand": "echo Hello from base config"
-  }
+    "remoteUser": "root"
+}

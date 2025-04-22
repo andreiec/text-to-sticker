@@ -36,7 +36,7 @@ class DDPMSampler:
         return variance
 
     def step(self, timestep, latents, model_output):
-        t = timestep
+        t = int(timestep)
         prev_t = self._get_previous_timestep(t)
 
         alpha_prod_t = self.alpha_cumprod[timestep]
@@ -63,29 +63,8 @@ class DDPMSampler:
         pred_prev_sample = pred_prev_sample + variance
     
         return pred_prev_sample
-
-    # def add_noise(self, original_samples, timesteps):
-    #     alpha_cumprod = self.alpha_cumprod.to(device=original_samples.device, dtype=original_samples.dtype)
-    #     timesteps = timesteps.to(original_samples.device)
-
-    #     sqrt_alpha_prod = alpha_cumprod[timesteps] ** 0.5
-    #     sqrt_alpha_prod = sqrt_alpha_prod.flatten()
-
-    #     while len(sqrt_alpha_prod) < len(original_samples.shape):
-    #         sqrt_alpha_prod = sqrt_alpha_prod.unsqueeze(-1)
-        
-    #     sqrt_one_minus_alpha_prod = (1 - alpha_cumprod[timesteps]) ** 0.5
-    #     sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.flatten()
-
-    #     while len(sqrt_one_minus_alpha_prod) < len(original_samples.shape):
-    #         sqrt_one_minus_alpha_prod = sqrt_one_minus_alpha_prod.unsqueeze(-1)
-        
-    #     noise = torch.randn(original_samples.shape, generator=self.generator, device=original_samples.device, dtype=original_samples.dtype)
-    #     noisy_samples = (sqrt_alpha_prod * original_samples) + (sqrt_one_minus_alpha_prod) * noise
-
-    #     return noisy_samples
     
-    def add_noise(self, original_samples, timesteps):
+    def add_noise(self, original_samples, timesteps, noise=None):
         alpha_cumprod = self.alpha_cumprod.to(device=original_samples.device, dtype=original_samples.dtype)
         timesteps = timesteps.to(original_samples.device)
 
@@ -94,7 +73,8 @@ class DDPMSampler:
         sqrt_alpha_prod = alpha_cumprod[timesteps].sqrt().reshape(shape)
         sqrt_one_minus_alpha_prod = (1 - alpha_cumprod[timesteps]).sqrt().reshape(shape)
 
-        noise = torch.randn(original_samples.shape, dtype=original_samples.dtype, device=original_samples.device, generator=self.generator)
+        if noise is None:
+            noise = torch.randn(original_samples.shape, dtype=original_samples.dtype, device=original_samples.device, generator=self.generator)
 
         noisy_samples = sqrt_alpha_prod * original_samples + sqrt_one_minus_alpha_prod * noise
         return noisy_samples
