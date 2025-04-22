@@ -8,9 +8,10 @@ from torchvision import transforms
 
 
 class EmojiDataset(Dataset):
-    def __init__(self, json_path, image_size=128, tokenizer=None, max_length=77):
+    def __init__(self, json_path, image_size=128, tokenize=True, tokenizer=None, max_length=77):
         self.json_path = Path(json_path)
         self.root_dir = self.json_path.parent
+        self.tokenize = tokenize
         self.tokenizer = tokenizer
         self.max_length = max_length
 
@@ -34,7 +35,6 @@ class EmojiDataset(Dataset):
             T.Resize((image_size, image_size)),
             T.ToTensor(),
             transforms.Normalize([0.5], [0.5])
-            #T.Lambda(lambda t: (t * 2) - 1)
         ])
 
 
@@ -57,17 +57,23 @@ class EmojiDataset(Dataset):
 
         image = Image.open(image_path).convert('RGBA').convert('RGB')
         image = self.transform(image)
-
-        if not self.tokenizer:
-            raise ValueError('No tokenizer specified.')
         
-        tokens = self.tokenizer(
-            text_input,
-            padding="max_length",
-            max_length=self.max_length,
-            truncation=True,
-            return_tensors="pt"
-        )["input_ids"].squeeze(0)
+        sample = {'image': image}
 
-        return {'image': image, 'tokens': tokens, 'description': text_input}
+        if self.tokenize:
+            if not self.tokenizer:
+                raise ValueError('No tokenizer specified')
+
+            tokens = self.tokenizer(
+                text_input,
+                padding="max_length",
+                max_length=self.max_length,
+                truncation=True,
+                return_tensors="pt"
+            )["input_ids"].squeeze(0)
+
+            sample['tokens'] = tokens
+            sample['description'] = text_input
+
+        return sample
 

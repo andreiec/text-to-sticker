@@ -2,11 +2,9 @@
 data/emoji_dataset_*
 
 # Outputs
-samples/epoch_*.png
+samples/
 !samples/epoch.png
-
-vae_recons/*
-!vae_recons/.gitkeep
+!samples/README.md
 
 # Model checkpoints
 /checkpoints

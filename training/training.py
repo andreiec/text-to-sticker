@@ -5,7 +5,7 @@ project_root = Path(__file__).resolve().parents[1]
 sys.path.append(str(project_root))
 
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use('Agg')
 
 import os
 import torch
@@ -20,7 +20,7 @@ from src.encoder import VAE_Encoder
 from src.decoder import VAE_Decoder
 from src.diffusion import Diffusion
 from utils.dataset import EmojiDataset
-from utils.utils import log_vae_reconstructions, sample_and_log
+from utils.utils import load_checkpoint, log_reconstructions, sample_and_log, save_checkpoint
 
 
 def train_step(batch, models, scheduler, optimizer, device, recon_loss_weight=1.0):
@@ -57,13 +57,10 @@ def train_step(batch, models, scheduler, optimizer, device, recon_loss_weight=1.
     return {'total': loss.item(), 'diff': diffusion_loss.item(), 'recon': recon_loss.item()}
 
 
-def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start_epoch=0, recon_loss_weight=1.0):
-    os.makedirs("checkpoints", exist_ok=True)
-    
-    for epoch in range(start_epoch, epochs):
-
-        print(f"Epoch {epoch + 1}")
-        pbar = tqdm(dataloader, ncols=120)
+def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start_epoch=0, recon_loss_weight=1.0):    
+    for epoch in range(start_epoch, start_epoch + epochs):
+        print(f'Epoch {epoch + 1} / {start_epoch + epochs}')
+        pbar = tqdm(dataloader, ncols=150)
 
         total_loss_sum = 0.0
         diff_loss_sum = 0.0
@@ -98,24 +95,24 @@ def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start
             text_encoder=model_dict['text_encoder'],
             scheduler=scheduler,
             device=device,
-            epoch=epoch
+            epoch=epoch,
+            save=True,
+            save_path='samples/diffusion/samples'
         )
 
-        log_vae_reconstructions(
+        log_reconstructions(
             encoder=model_dict['encoder'],
             decoder=model_dict['decoder'],
             dataloader=dataloader,
             device=device,
-            epoch=epoch
+            epoch=epoch,
+            save=True,
+            save_dir='samples/diffusion/vae_recon'
         )
 
-        torch.save({
-            'encoder': encoder.state_dict(),
-            'decoder': decoder.state_dict(),
-            'diffusion': diffusion.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            'epoch': epoch + 1,
-        }, f'checkpoints/epoch_{epoch+1:04d}.pth')
+        if (epoch + 1) % 5 == 0 or (epoch + 1 == start_epoch + epochs):
+            save_path = f'checkpoints/diffusion/epoch_{epoch + 1:04d}.pth'
+            save_checkpoint(model_dict, optimizer, epoch, save_path)
 
 
 if __name__ == '__main__':
@@ -150,20 +147,6 @@ if __name__ == '__main__':
         lr=1e-4
     )
 
-    start_epoch = 0
-    checkpoint_path = 'checkpoints/epoch_0005.pth'
-
-    if os.path.exists(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-
-        encoder.load_state_dict(checkpoint['encoder'])
-        decoder.load_state_dict(checkpoint['decoder'])
-        diffusion.load_state_dict(checkpoint['diffusion'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-
-        start_epoch = checkpoint['epoch']
-        print(f'Resumed from checkpoint at epoch {start_epoch}')
-
     models = {
         'encoder': encoder,
         'decoder': decoder,
@@ -171,4 +154,12 @@ if __name__ == '__main__':
         'text_encoder': text_encoder
     }
 
-    train(models, dataloader, optimizer, scheduler, device, epochs=10, start_epoch=5)
+    start_epoch = 0
+    use_checkpoints = True
+    checkpoint_path = 'checkpoints/epoch_0006.pth'
+
+    if use_checkpoints and os.path.exists(checkpoint_path):
+        start_epoch = load_checkpoint(models, optimizer, checkpoint_path) + 1
+        print(f'Resuming from epoch {start_epoch}')
+
+    train(models, dataloader, optimizer, scheduler, device, start_epoch=start_epoch, epochs=10)
