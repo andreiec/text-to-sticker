@@ -17,7 +17,7 @@ from tqdm import tqdm
 from src.encoder import VAE_Encoder
 from src.decoder import VAE_Decoder
 from utils.dataset import EmojiDataset
-from utils.utils import load_checkpoint, save_checkpoint, log_reconstructions_vae
+from utils.utils import load_checkpoint, save_checkpoint, log_reconstructions
 
 
 def train_step(batch, encoder, decoder, optimizer, device):
@@ -36,7 +36,7 @@ def train_step(batch, encoder, decoder, optimizer, device):
     return loss.item()
 
 
-def train_vae(encoder, decoder, dataloader, optimizer, device, start_epoch=0, epochs=10):
+def train(encoder, decoder, dataloader, optimizer, device, start_epoch=0, epochs=10):
     encoder.train()
     decoder.train()
 
@@ -55,7 +55,7 @@ def train_vae(encoder, decoder, dataloader, optimizer, device, start_epoch=0, ep
         avg_loss = total_loss / num_batches
         print(f"Epoch {epoch + 1} done | avg vae loss: {avg_loss:.6f}")
 
-        log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=True, save_dir='samples/vae/recons')
+        log_reconstructions(encoder, decoder, dataloader, device, epoch, save=True, save_path='samples/vae/recons')
 
         if (epoch + 1) % 5 == 0 or (epoch + 1) == (start_epoch + epochs):
             save_checkpoint({"encoder": encoder, "decoder": decoder}, optimizer, epoch, f"checkpoints/vae/vae_epoch_{epoch+1:04d}.pth", vae_only=True)
@@ -81,11 +81,11 @@ if __name__ == '__main__':
     }
 
     start_epoch = 0
-    checkpoint_path = project_root / 'checkpoints/vae/vae_epoch_0015.pth'
+    checkpoint_path = project_root / 'checkpoints/vae/vae_epoch_0020.pth'
     resume = True
 
     if resume:
         start_epoch = load_checkpoint(models, optimizer, checkpoint_path) + 1
         print(f"Resumed from checkpoint: epoch {start_epoch}")
 
-    train_vae(encoder, decoder, dataloader, optimizer, device, start_epoch=start_epoch, epochs=5)
+    train(encoder, decoder, dataloader, optimizer, device, start_epoch=start_epoch, epochs=15)

@@ -33,7 +33,6 @@ def train_step(batch, models, scheduler, optimizer, device, recon_loss_weight=1.
     tokens = batch['tokens'].to(device)
     context = text_encoder(tokens).last_hidden_state
 
-
     noise = torch.randn(images.size(0), 4, 32, 32).to(device)
     latents = encoder(images, noise)
 
@@ -57,7 +56,16 @@ def train_step(batch, models, scheduler, optimizer, device, recon_loss_weight=1.
     return {'total': loss.item(), 'diff': diffusion_loss.item(), 'recon': recon_loss.item()}
 
 
-def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start_epoch=0, recon_loss_weight=1.0):    
+def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start_epoch=0, recon_loss_weight=1.0, freeze_vae=True):
+    model_dict['diffusion'].train()
+
+    if freeze_vae:
+        model_dict['encoder'].eval()
+        model_dict['decoder'].eval()
+    else:
+        model_dict['decoder'].train()
+        model_dict['encoder'].train()
+
     for epoch in range(start_epoch, start_epoch + epochs):
         print(f'Epoch {epoch + 1} / {start_epoch + epochs}')
         pbar = tqdm(dataloader, ncols=150)
@@ -80,13 +88,12 @@ def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start
                 "diff": f"{losses['diff']:>8.6f}",
                 "recon": f"{losses['recon']:>8.6f}",
             })
-        
+
         avg_total = total_loss_sum / num_batches
         avg_diff = diff_loss_sum / num_batches
         avg_recon = recon_loss_sum / num_batches
 
         print(f"Epoch {epoch + 1} done | total: {avg_total:.6f} | diff: {avg_diff:.6f} | recon: {avg_recon:.6f}")
-
 
         sample_and_log(
             diffusion=model_dict['diffusion'],
@@ -107,16 +114,28 @@ def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start
             device=device,
             epoch=epoch,
             save=True,
-            save_dir='samples/diffusion/vae_recon'
+            save_path='samples/diffusion/vae_recon'
         )
 
         if (epoch + 1) % 5 == 0 or (epoch + 1 == start_epoch + epochs):
             save_path = f'checkpoints/diffusion/epoch_{epoch + 1:04d}.pth'
             save_checkpoint(model_dict, optimizer, epoch, save_path)
 
+        if not freeze_vae:
+            model_dict['decoder'].train()
+            model_dict['encoder'].train()
+
+        model_dict['diffusion'].train()
+
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    vae_checkpoint_path = 'checkpoints/vae/vae_epoch_0035.pth'
+    diffusion_checkpoint_path = 'checkpoints/diffusion/epoch_0005.pth'
+
+    freeze_vae = True
+    resume_from_checkpoint = True
 
     # Load models
     tokenizer = CLIPTokenizer(
@@ -130,6 +149,18 @@ if __name__ == '__main__':
     decoder = VAE_Decoder().to(device)
     diffusion = Diffusion().to(device)
 
+    if os.path.exists(vae_checkpoint_path):
+        print(f"Loading VAE weights from {vae_checkpoint_path}")
+        vae_ckpt = torch.load(vae_checkpoint_path, map_location='cpu')
+        encoder.load_state_dict(vae_ckpt['encoder'])
+        decoder.load_state_dict(vae_ckpt['decoder'])
+
+    if freeze_vae:
+        for p in encoder.parameters():
+            p.requires_grad = False
+        for p in decoder.parameters():
+            p.requires_grad = False
+
     # Load dataset
     dataset = EmojiDataset(project_root / 'data' / 'emoji_dataset_128x128' / 'emoji_dataset.json', image_size=128, tokenizer=tokenizer)
     dataloader = DataLoader(dataset, batch_size=8, shuffle=True, drop_last=True)
@@ -137,15 +168,18 @@ if __name__ == '__main__':
     # Load number generator and scheduler
     generator = torch.Generator(device=device)
     generator.manual_seed(42)
-        
+
     scheduler = DDPMSampler(generator)
     scheduler.set_inference_timesteps(num_inference_steps=50)
 
     # Define optimizer
-    optimizer = torch.optim.AdamW(
-        list(encoder.parameters()) + list(decoder.parameters()) + list(diffusion.parameters()),
-        lr=1e-4
-    )
+    if freeze_vae:
+        optimizer = torch.optim.AdamW(diffusion.parameters(), lr=1e-4)
+    else:
+        optimizer = torch.optim.AdamW(
+            list(encoder.parameters()) + list(decoder.parameters()) + list(diffusion.parameters()),
+            lr=1e-4
+        )
 
     models = {
         'encoder': encoder,
@@ -155,11 +189,10 @@ if __name__ == '__main__':
     }
 
     start_epoch = 0
-    use_checkpoints = True
-    checkpoint_path = 'checkpoints/epoch_0006.pth'
 
-    if use_checkpoints and os.path.exists(checkpoint_path):
-        start_epoch = load_checkpoint(models, optimizer, checkpoint_path) + 1
-        print(f'Resuming from epoch {start_epoch}')
+    if resume_from_checkpoint and os.path.exists(diffusion_checkpoint_path):
+        print(f"Loading Diffusion weights from {diffusion_checkpoint_path}")
+        start_epoch = load_checkpoint(models, optimizer, diffusion_checkpoint_path) + 1
+        print(f"Resuming from epoch {start_epoch}")
 
-    train(models, dataloader, optimizer, scheduler, device, start_epoch=start_epoch, epochs=10)
+    train(models, dataloader, optimizer, scheduler, device, start_epoch=start_epoch, epochs=5)

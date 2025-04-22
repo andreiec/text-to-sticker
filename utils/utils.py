@@ -20,7 +20,7 @@ def tensor_image_grid(tensor, title=None, prompts=None, vae_only=False, save=Fal
     grid_image = grid.permute(1, 2, 0).cpu().numpy()
 
     fig, ax = plt.subplots(figsize=(grid_image.shape[1] // 50, grid_image.shape[0] // 50))
-    ax.imshow(grid_image)
+    ax.imshow(grid_image, interpolation='nearest')
     ax.axis('off')
 
     if vae_only:
@@ -68,7 +68,6 @@ def sample_and_log(diffusion, decoder, tokenizer, text_encoder, scheduler, devic
             latents = scheduler.step(time[0], latents, noise_pred)
 
         image = decoder(latents)
-        image = (image.clamp(-1, 1) + 1) / 2
         all_images.append(image)
 
     all_images = torch.cat(all_images)
@@ -76,37 +75,11 @@ def sample_and_log(diffusion, decoder, tokenizer, text_encoder, scheduler, devic
     if save:
         save_path = os.path.join(save_path, f'epoch_{epoch+1:04d}.png')
 
-    tensor_image_grid(all_images, save_path, nrow=len(prompts), prompts=prompts, save=save, save_path=save_path)
+    tensor_image_grid(all_images, prompts=prompts, save=save, save_path=save_path)
 
 
 @torch.no_grad()
-def log_reconstructions(encoder, decoder, dataloader, device, epoch, save=False, save_path=''):
-    if save and save_path == '':
-        raise ValueError('Invalid save path')
-
-    encoder.eval()
-    decoder.eval()
-
-    batch = next(iter(dataloader))
-    images = batch["image"].to(device)
-    noise = torch.randn(images.size(0), 4, 32, 32).to(device)
-
-    latents = encoder(images, noise)
-    recon_images = decoder(latents)
-
-    images = (images + 1) / 2
-    recon_images = (recon_images + 1) / 2
-
-    stacked = torch.cat([images, recon_images])
-
-    if save:
-        save_path = os.path.join(save_path, f"epoch_{epoch+1:04d}_vae_recons.png")
-
-    tensor_image_grid(stacked, save_path, nrow=images.size(0), title='VAE Reconstructions', save=save, save_path=save_path)
-
-
-@torch.no_grad()
-def log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=False, save_path=''):
+def log_reconstructions(encoder, decoder, dataloader, device, epoch, vae_only=False, save=False, save_path=''):
     if save and save_path == '':
         raise ValueError('Invalid save path')
 
@@ -115,17 +88,19 @@ def log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=Fa
 
     batch = next(iter(dataloader))
     images = batch['image'].to(device)
-
     noise = torch.randn(images.size(0), 4, 32, 32).to(device)
     latents = encoder(images, noise)
-    recons = decoder(latents)
+    recon_images = decoder(latents)
 
-    combined = torch.cat([images, recons], dim=0)
+    combined = torch.cat([images, recon_images], dim=0)
 
     if save:
-        save_path = os.path.join(save_path, f"vae_recon_epoch_{epoch:04d}.png")
+        if vae_only:
+            save_path = os.path.join(save_path, f"vae_recon_epoch_{epoch:04d}.png")
+        else:
+            save_path = os.path.join(save_path, f"epoch_{epoch+1:04d}_vae_recons.png")
 
-    tensor_image_grid(combined, save_path, title='VAE Reconstructions', vae_only=True, save=save, save_path=save_path)
+    tensor_image_grid(combined, title='VAE Reconstructions', vae_only=vae_only, save=save, save_path=save_path)
 
 
 @torch.no_grad()
@@ -265,7 +240,7 @@ def save_checkpoint(models, optimizer, epoch, path, vae_only=False):
 
 
 def load_checkpoint(models, optimizer, path):
-    checkpoint = torch.load(path, map_location='cpu')
+    checkpoint = torch.load(path, map_location='cpu', weights_only=False)
     models['encoder'].load_state_dict(checkpoint['encoder'])
     models['decoder'].load_state_dict(checkpoint['decoder'])
 
