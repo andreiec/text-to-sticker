@@ -54,25 +54,43 @@ def train_step(batch, models, scheduler, optimizer, device, recon_loss_weight=1.
     loss.backward()
     optimizer.step()
 
-    return loss.item(), diffusion_loss.item(), recon_loss.item()
+    return {'total': loss.item(), 'diff': diffusion_loss.item(), 'recon': recon_loss.item()}
 
 
-def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10):
+def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start_epoch=0, recon_loss_weight=1.0):
     os.makedirs("checkpoints", exist_ok=True)
     
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
+
         print(f"Epoch {epoch + 1}")
-        pbar = tqdm(dataloader)
+        pbar = tqdm(dataloader, ncols=120)
+
+        total_loss_sum = 0.0
+        diff_loss_sum = 0.0
+        recon_loss_sum = 0.0
+        num_batches = 0
 
         for batch in pbar:
-            total_loss, diff_loss, rec_loss = train_step(batch, model_dict, scheduler, optimizer, device)
+            losses = train_step(batch, model_dict, scheduler, optimizer, device, recon_loss_weight)
+
+            total_loss_sum += losses['total']
+            diff_loss_sum += losses['diff']
+            recon_loss_sum += losses['recon']
+            num_batches += 1
 
             pbar.set_postfix({
-                "total": f"{total_loss:.4f}",
-                "diff": f"{diff_loss:.4f}",
-                "recon": f"{rec_loss:.4f}",
+                "total": f"{losses['total']:>8.6f}",
+                "diff": f"{losses['diff']:>8.6f}",
+                "recon": f"{losses['recon']:>8.6f}",
             })
         
+        avg_total = total_loss_sum / num_batches
+        avg_diff = diff_loss_sum / num_batches
+        avg_recon = recon_loss_sum / num_batches
+
+        print(f"Epoch {epoch + 1} done | total: {avg_total:.6f} | diff: {avg_diff:.6f} | recon: {avg_recon:.6f}")
+
+
         sample_and_log(
             diffusion=model_dict['diffusion'],
             decoder=model_dict['decoder'],
@@ -95,53 +113,62 @@ def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10):
             'encoder': encoder.state_dict(),
             'decoder': decoder.state_dict(),
             'diffusion': diffusion.state_dict(),
-            'text_encoder': text_encoder.state_dict(),
             'optimizer': optimizer.state_dict(),
             'epoch': epoch + 1,
-        }, f'checkpoints/epoch_{epoch+1:04d}.pt')
+        }, f'checkpoints/epoch_{epoch+1:04d}.pth')
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if __name__ == '__main__':
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-tokenizer_path = project_root / 'data' / 'tokenizer'
+    # Load models
+    tokenizer = CLIPTokenizer(
+        vocab_file=str(project_root / 'data' / 'tokenizer' / 'vocab.json'),
+        merges_file=str(project_root / 'data' / 'tokenizer' / 'merges.txt'),
+    )
 
-tokenizer = CLIPTokenizer(
-    vocab_file=str(tokenizer_path / 'vocab.json'),
-    merges_file=str(tokenizer_path / 'merges.txt'),
-)
+    text_encoder = CLIPTextModel.from_pretrained('openai/clip-vit-large-patch14').to(device)
 
-text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").to(device)
-encoder = VAE_Encoder().to(device)
-decoder = VAE_Decoder().to(device)
-diffusion = Diffusion().to(device)
+    encoder = VAE_Encoder().to(device)
+    decoder = VAE_Decoder().to(device)
+    diffusion = Diffusion().to(device)
 
-dataset = EmojiDataset(str(project_root / 'data/emoji_dataset_128x128/emoji_dataset.json'), image_size=128, tokenizer=tokenizer)
-dataloader = DataLoader(dataset, batch_size=8, shuffle=True, drop_last=True)
+    # Load dataset
+    dataset = EmojiDataset(project_root / 'data' / 'emoji_dataset_128x128' / 'emoji_dataset.json', image_size=128, tokenizer=tokenizer)
+    dataloader = DataLoader(dataset, batch_size=8, shuffle=True, drop_last=True)
 
-generator = torch.Generator(device=device)
+    # Load number generator and scheduler
+    generator = torch.Generator(device=device)
+    generator.manual_seed(42)
+        
+    scheduler = DDPMSampler(generator)
+    scheduler.set_inference_timesteps(num_inference_steps=50)
 
-seed = 42
+    # Define optimizer
+    optimizer = torch.optim.AdamW(
+        list(encoder.parameters()) + list(decoder.parameters()) + list(diffusion.parameters()),
+        lr=1e-4
+    )
 
-if seed is None:
-    generator.seed()
-else:
-    generator.manual_seed(seed)
-    
-scheduler = DDPMSampler(generator)
-scheduler.set_inference_timesteps(num_inference_steps=50)
+    start_epoch = 0
+    checkpoint_path = 'checkpoints/epoch_0005.pth'
 
-#optimizer = torch.optim.AdamW(diffusion.parameters(), lr=1e-4)
+    if os.path.exists(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
-optimizer = torch.optim.AdamW(
-    list(encoder.parameters()) + list(decoder.parameters()) + list(diffusion.parameters()),
-    lr=1e-4
-)
+        encoder.load_state_dict(checkpoint['encoder'])
+        decoder.load_state_dict(checkpoint['decoder'])
+        diffusion.load_state_dict(checkpoint['diffusion'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
 
-models = {
-    'encoder': encoder,
-    'decoder': decoder,
-    'diffusion': diffusion,
-    'text_encoder': text_encoder
-}
+        start_epoch = checkpoint['epoch']
+        print(f'Resumed from checkpoint at epoch {start_epoch}')
 
-train(models, dataloader, optimizer, scheduler, device, epochs=5)
+    models = {
+        'encoder': encoder,
+        'decoder': decoder,
+        'diffusion': diffusion,
+        'text_encoder': text_encoder
+    }
+
+    train(models, dataloader, optimizer, scheduler, device, epochs=10, start_epoch=5)

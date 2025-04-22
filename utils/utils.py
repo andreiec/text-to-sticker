@@ -53,7 +53,7 @@ def sample_and_log(diffusion, decoder, tokenizer, text_encoder, scheduler, devic
                 fontsize=10, ha='center', va='top', color='black')
 
     plt.tight_layout()
-    save_path = os.path.join(save_dir, f'epoch_{epoch:04d}.png')
+    save_path = os.path.join(save_dir, f'epoch_{epoch+1:04d}.png')
     plt.savefig(save_path, bbox_inches='tight', pad_inches=0.3)
     plt.close()
 
@@ -79,4 +79,4 @@ def log_vae_reconstructions(encoder, decoder, dataloader, device, epoch, save_di
     grid = vutils.make_grid(stacked, nrow=images.size(0))
     ndarr = grid.mul(255).byte().permute(1, 2, 0).cpu().numpy()
     img = Image.fromarray(ndarr)
-    img.save(os.path.join(save_dir, f"epoch_{epoch:04d}_vae_recons.png"))
+    img.save(os.path.join(save_dir, f"epoch_{epoch+1:04d}_vae_recons.png"))

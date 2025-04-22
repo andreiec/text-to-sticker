@@ -5,6 +5,12 @@ data/emoji_dataset_*
 samples/epoch_*.png
 !samples/epoch.png
 
+vae_recons/*
+!vae_recons/.gitkeep
+
+# Model checkpoints
+/checkpoints
+
 # Jupyter
 .ipynb_checkpoints/
 
