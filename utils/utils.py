@@ -1,5 +1,6 @@
 import io
 import os
+import math
 import torch
 import torchvision.utils as vutils
 import matplotlib.pyplot as plt
@@ -104,6 +105,32 @@ def log_reconstructions(encoder, decoder, dataloader, device, epoch, vae_only=Fa
 
 
 @torch.no_grad()
+def log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=False, save_path=''):
+    if save and save_path == '':
+        raise ValueError('Invalid save path')
+
+    encoder.eval()
+    decoder.eval()
+
+    batch = next(iter(dataloader))
+    images = batch["image"].to(device)
+
+    mu, logvar = encoder(images)
+    std = (0.5 * logvar).exp()
+    eps = torch.randn_like(std)
+    z = mu + eps * std
+
+    recons = decoder(z * 0.18215)
+
+    stacked = torch.cat([images, recons])
+
+    if save:
+        save_path = os.path.join(save_path, f"epoch_{epoch+1:04d}_vae_recons.png")
+
+    tensor_image_grid(stacked, title='VAE Reconstructions', vae_only=True, save=save, save_path=save_path)
+
+
+@torch.no_grad()
 def sample_from_vae(decoder, device, num_samples=8, save=False, save_path=''):
     if save and save_path == '':
         raise ValueError('Invalid save path')
@@ -112,6 +139,17 @@ def sample_from_vae(decoder, device, num_samples=8, save=False, save_path=''):
     latents = torch.randn(num_samples, 4, 32, 32).to(device)
     images = decoder(latents)
 
+    tensor_image_grid(images, title='Random VAE Samples', vae_only=True, save=save, save_path=save_path)
+
+
+@torch.no_grad()
+def sample_from_vae_b(decoder, device, num_samples=8, save=False, save_path=''):
+    if save and save_path == '':
+        raise ValueError('Invalid save path')
+
+    decoder.eval()
+    latents = torch.randn(num_samples, 4, 32, 32).to(device)
+    images = decoder(latents * 0.18215)
     tensor_image_grid(images, title='Random VAE Samples', vae_only=True, save=save, save_path=save_path)
 
 
@@ -249,3 +287,21 @@ def load_checkpoint(models, optimizer, path):
 
     optimizer.load_state_dict(checkpoint['optimizer'])
     return checkpoint['epoch']
+
+
+def reparameterize(mu, logvar):
+    std = torch.exp(0.5 * logvar)
+    eps = torch.randn_like(std)
+    return mu + eps * std
+
+
+def kl_divergence(mu, logvar):
+    return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp()) / mu.numel()
+
+
+def get_kl_beta_linear(epoch, warmup_epochs=10, max_beta=1e-2):
+    return min(max_beta, max_beta * epoch / warmup_epochs)
+
+
+def get_kl_beta_sigmoid(epoch, max_beta=1e-2, steepness=0.25, mid_epoch=10):
+    return max_beta / (1 + math.exp(-steepness * (epoch - mid_epoch)))

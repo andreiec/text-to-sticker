@@ -36,19 +36,11 @@ class VAE_Encoder(nn.Sequential):
             nn.Conv2d(8, 8, kernel_size=1, padding=0),
         )
 
-    def forward(self, x, noise):
+    def forward(self, x):
         for module in self:
             if getattr(module, 'stride', None) == (2, 2):
                 x = F.pad(x, (0, 1, 0, 1))
             x = module(x)
 
-        mean, log_var = torch.chunk(x, 2, dim=1)
-        log_var = torch.clamp(log_var, -30, 20)
-
-        var = log_var.exp()
-        std = var.sqrt()
-
-        x = mean + std * noise
-        x = x * 0.18215
-
-        return x
+        mu, logvar = torch.chunk(x, 2, dim=1)
+        return mu, logvar

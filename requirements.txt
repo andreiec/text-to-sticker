@@ -3,3 +3,4 @@ tqdm==4.67.1
 jupyter==1.1.1
 ipywidgets==8.1.5
 transformers==4.51.3
+wandb==0.19.10
