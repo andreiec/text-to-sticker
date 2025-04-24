@@ -20,7 +20,8 @@ from src.encoder import VAE_Encoder
 from src.decoder import VAE_Decoder
 from src.diffusion import Diffusion
 from utils.dataset import EmojiDataset
-from utils.utils import load_checkpoint, log_reconstructions, sample_and_log, save_checkpoint
+from utils.visualisation import log_reconstructions, sample_and_log
+from utils.utils import load_checkpoint, save_checkpoint
 
 
 def train_step(batch, models, scheduler, optimizer, device, recon_loss_weight=1.0):
@@ -33,8 +34,8 @@ def train_step(batch, models, scheduler, optimizer, device, recon_loss_weight=1.
     tokens = batch['tokens'].to(device)
     context = text_encoder(tokens).last_hidden_state
 
-    noise = torch.randn(images.size(0), 4, 32, 32).to(device)
-    latents = encoder(images, noise)
+    mu, _ = encoder(images)
+    latents = mu
 
     bsz = latents.size(0)
     true_noise = torch.randn_like(latents)
@@ -44,8 +45,9 @@ def train_step(batch, models, scheduler, optimizer, device, recon_loss_weight=1.
     pred_noise = diffusion(noisy_latents, context, timesteps)
     diffusion_loss = F.mse_loss(pred_noise, true_noise)
 
-    recon_images = decoder(latents)
-    recon_loss = F.mse_loss(recon_images, images)
+    with torch.no_grad():
+        recon_images = decoder(latents)
+        recon_loss = F.mse_loss(recon_images, images)
 
     loss = diffusion_loss + recon_loss_weight * recon_loss
 
@@ -70,9 +72,7 @@ def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start
         print(f'Epoch {epoch + 1} / {start_epoch + epochs}')
         pbar = tqdm(dataloader, ncols=150)
 
-        total_loss_sum = 0.0
-        diff_loss_sum = 0.0
-        recon_loss_sum = 0.0
+        total_loss_sum = diff_loss_sum = recon_loss_sum = 0.0
         num_batches = 0
 
         for batch in pbar:
@@ -131,11 +131,11 @@ def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    vae_checkpoint_path = 'checkpoints/vae/vae_epoch_0035.pth'
+    vae_checkpoint_path = 'checkpoints/vae-b/b-linear-scheduled/vae_epoch_0060.pth'
     diffusion_checkpoint_path = 'checkpoints/diffusion/epoch_0005.pth'
 
     freeze_vae = True
-    resume_from_checkpoint = True
+    resume_from_checkpoint = False
 
     # Load models
     tokenizer = CLIPTokenizer(
@@ -151,7 +151,7 @@ if __name__ == '__main__':
 
     if os.path.exists(vae_checkpoint_path):
         print(f"Loading VAE weights from {vae_checkpoint_path}")
-        vae_ckpt = torch.load(vae_checkpoint_path, map_location='cpu')
+        vae_ckpt = torch.load(vae_checkpoint_path, map_location='cpu', weights_only=False)
         encoder.load_state_dict(vae_ckpt['encoder'])
         decoder.load_state_dict(vae_ckpt['decoder'])
 
@@ -162,7 +162,7 @@ if __name__ == '__main__':
             p.requires_grad = False
 
     # Load dataset
-    dataset = EmojiDataset(project_root / 'data' / 'emoji_dataset_128x128' / 'emoji_dataset.json', image_size=128, tokenizer=tokenizer)
+    dataset = EmojiDataset(project_root / 'data/emoji_dataset_128x128/emoji_dataset.json', image_size=128, tokenizer=tokenizer)
     dataloader = DataLoader(dataset, batch_size=8, shuffle=True, drop_last=True)
 
     # Load number generator and scheduler

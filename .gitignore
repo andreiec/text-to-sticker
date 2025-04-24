@@ -1,6 +1,9 @@
 # Data
 data/emoji_dataset_*
 
+# Logs
+logs/
+
 # Outputs
 samples/
 !samples/epoch.png
