@@ -10,7 +10,6 @@ import torch.nn.functional as F
 import matplotlib
 matplotlib.use('Agg')
 
-from transformers import get_cosine_schedule_with_warmup
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -18,7 +17,7 @@ from src.encoder import VAE_Encoder
 from src.decoder import VAE_Decoder
 from utils.dataset import EmojiDataset
 from utils.scheluder import KLAnnealingScheduler
-from utils.visualisation import sample_from_vae_b, log_reconstructions_vae
+from utils.visualisation import sample_from_vae, log_reconstructions_vae
 from utils.utils import kl_divergence, load_checkpoint, log_metrics, reparameterize, save_checkpoint
 
 
@@ -65,10 +64,10 @@ def train(model_name, encoder, decoder, dataloader, optimizer, device, start_epo
             pbar.set_postfix({
                 'loss': f"{loss:>8.6f}",
                 'recon': f"{recon:>8.6f}",
-                'kl': f"{kl:>8.4f}",
-                'kl_scaled': f"{kl*beta:>8.4f}",
-                'lr': f"{optimizer.param_groups[0]['lr']:>8.6f}",
-                'beta': f"{beta:>8.4f}"
+                'kl': f"{kl:>8.6f}",
+                'kl_scaled': f"{kl*beta:>8.6f}",
+                'lr': f"{lr_scheduler.get_last_lr()[0] if lr_scheduler else optimizer.param_groups[0]['lr']:>8.6f}",
+                'beta': f"{beta:>8.6f}"
             })
 
         avg_loss = total_loss / len(dataloader)
@@ -87,19 +86,16 @@ def train(model_name, encoder, decoder, dataloader, optimizer, device, start_epo
             'recon': avg_recon,
             'kl': avg_kl,
             'kl_scaled': avg_kl * beta,
+            'lr': lr_scheduler.get_last_lr()[0] if lr_scheduler else optimizer.param_groups[0]['lr'],
             'beta': beta
         }
 
-        if lr_scheduler:
-            metrics['lr'] = optimizer.param_groups[0]['lr']
-
         log_metrics(metrics, log_path=log_path, epoch=epoch + 1)
         log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=True, save_path=reconstructions_path)
-        sample_from_vae_b(decoder, device, num_samples=8, save=True, save_path=sample_path)
+        sample_from_vae(decoder, device, num_samples=8, save=True, save_path=sample_path)
 
         if (epoch + 1) % 5 == 0 or (epoch + 1) == (start_epoch + epochs):
             save_checkpoint({'encoder': encoder, 'decoder': decoder}, optimizer, epoch, checkpoint_path, vae_only=True)
-
 
         encoder.train()
         decoder.train()
@@ -128,7 +124,7 @@ if __name__ == '__main__':
 
     optimizer = torch.optim.AdamW(list(encoder.parameters()) + list(decoder.parameters()), lr=1e-4)
 
-    lr_scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=10, num_training_steps=total_epochs * len(dataloader))
+    # lr_scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=10, num_training_steps=total_epochs * len(dataloader))
     beta_scheduler = KLAnnealingScheduler(max_beta=1e-4, strategy='sigmoid', mid_epoch=20, steepness=0.3)
 
     if resume:
@@ -143,6 +139,6 @@ if __name__ == '__main__':
           device,
           start_epoch=start_epoch,
           epochs=total_epochs,
-          lr_scheduler=lr_scheduler,
+          lr_scheduler=None,
           beta_scheduler=beta_scheduler
     )

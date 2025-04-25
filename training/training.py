@@ -4,15 +4,19 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parents[1]
 sys.path.append(str(project_root))
 
-import matplotlib
-matplotlib.use('Agg')
-
 import os
+import argparse
+import random
+import numpy as np
 import torch
 import torch.nn.functional as F
 
+import matplotlib
+matplotlib.use('Agg')
+
 from torch.utils.data import DataLoader
-from transformers import CLIPTokenizer, CLIPTextModel
+from torch.amp import autocast, GradScaler
+from transformers import CLIPTokenizer, CLIPTextModel, get_cosine_schedule_with_warmup
 from tqdm import tqdm
 
 from src.ddpm import DDPMSampler
@@ -21,178 +25,243 @@ from src.decoder import VAE_Decoder
 from src.diffusion import Diffusion
 from utils.dataset import EmojiDataset
 from utils.visualisation import log_reconstructions, sample_and_log
-from utils.utils import load_checkpoint, save_checkpoint
+from utils.utils import load_checkpoint, log_metrics, save_checkpoint
 
 
-def train_step(batch, models, scheduler, optimizer, device, recon_loss_weight=1.0):
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train UNet for emoji diffusion")
+    parser.add_argument("--model_name", type=str, default="diffusion-1.0")
+    parser.add_argument("--vae_ckpt", type=str, default="checkpoints/vae-b/b-sigmoid-3/vae_epoch_0070.pth")
+    parser.add_argument("--diffusion_ckpt", type=str, default=None)
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--warmup_steps", type=int, default=500)
+    parser.add_argument("--num_train_steps", type=int, default=1000)
+    parser.add_argument("--num_infer_steps", type=int, default=50)
+    parser.add_argument("--recon_loss_weight", type=float, default=1.0)
+    parser.add_argument("--freeze_vae", action="store_true")
+    parser.add_argument("--finetune_text", action="store_true")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--seed", type=int, default=42)
+    return parser.parse_args()
+
+
+def train(
+    model_name: str,
+    models: dict,
+    dataloader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler: DDPMSampler,
+    device: torch.device,
+    lr_scheduler,
+    scaler: GradScaler,
+    args,
+    start_epoch: int = 0,
+):
+
     encoder = models['encoder']
     decoder = models['decoder']
     diffusion = models['diffusion']
-    text_encoder =  models['text_encoder']
+    text_encoder = models['text_encoder']
+    dataloader_len = len(dataloader)
 
-    images = batch['image'].to(device)
-    tokens = batch['tokens'].to(device)
-    context = text_encoder(tokens).last_hidden_state
+    for epoch in range(start_epoch, args.epochs):
+        diffusion.train()
 
-    mu, _ = encoder(images)
-    latents = mu
+        if args.freeze_vae:
+            encoder.eval()
+            decoder.eval()
+        else:
+            encoder.train()
+            decoder.train()
 
-    bsz = latents.size(0)
-    true_noise = torch.randn_like(latents)
-    timesteps = torch.randint(0, scheduler.num_training_steps, (bsz,), device=device)
-    noisy_latents = scheduler.add_noise(latents, timesteps, noise=true_noise)
+        if args.finetune_text:
+            text_encoder.train()
+        else:
+            text_encoder.eval()
 
-    pred_noise = diffusion(noisy_latents, context, timesteps)
-    diffusion_loss = F.mse_loss(pred_noise, true_noise)
-
-    with torch.no_grad():
-        recon_images = decoder(latents)
-        recon_loss = F.mse_loss(recon_images, images)
-
-    loss = diffusion_loss + recon_loss_weight * recon_loss
-
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
-    return {'total': loss.item(), 'diff': diffusion_loss.item(), 'recon': recon_loss.item()}
-
-
-def train(model_dict, dataloader, optimizer, scheduler, device, epochs=10, start_epoch=0, recon_loss_weight=1.0, freeze_vae=True):
-    model_dict['diffusion'].train()
-
-    if freeze_vae:
-        model_dict['encoder'].eval()
-        model_dict['decoder'].eval()
-    else:
-        model_dict['decoder'].train()
-        model_dict['encoder'].train()
-
-    for epoch in range(start_epoch, start_epoch + epochs):
-        print(f'Epoch {epoch + 1} / {start_epoch + epochs}')
-        pbar = tqdm(dataloader, ncols=150)
-
-        total_loss_sum = diff_loss_sum = recon_loss_sum = 0.0
-        num_batches = 0
+        pbar = tqdm(dataloader, ncols=150, desc=f"Epoch {epoch+1}/{args.epochs}")
+        total_loss = total_diffusion = total_recon = 0
 
         for batch in pbar:
-            losses = train_step(batch, model_dict, scheduler, optimizer, device, recon_loss_weight)
+            images = batch['image'].to(device)
+            tokens = batch['tokens'].to(device)
 
-            total_loss_sum += losses['total']
-            diff_loss_sum += losses['diff']
-            recon_loss_sum += losses['recon']
-            num_batches += 1
+            with torch.no_grad():
+                context = text_encoder(tokens).last_hidden_state
+
+            with autocast(device_type=device.type):
+                mu, _ = encoder(images)
+                latents = mu * 0.18215
+
+                bsz = latents.size(0)
+                timesteps = scheduler.sample_train_timesteps(bsz, device)
+                true_noise = torch.randn_like(latents)
+                noisy_latents = scheduler.add_noise(latents, timesteps, noise=true_noise)
+
+                pred_noise = diffusion(noisy_latents, context, timesteps)
+                diffusion_loss = F.mse_loss(pred_noise, true_noise)
+
+                with torch.no_grad():
+                    recon_images = decoder(latents)
+
+                recon_loss = F.mse_loss(recon_images, images)
+                loss = diffusion_loss + args.recon_loss_weight * recon_loss
+
+            total_loss += loss
+            total_diffusion += diffusion_loss
+            total_recon += recon_loss
+
+            optimizer.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+
+            torch.nn.utils.clip_grad_norm_(diffusion.parameters(), max_norm=1.0)
+
+            scaler.step(optimizer)
+            scaler.update()
+            lr_scheduler.step()
 
             pbar.set_postfix({
-                "total": f"{losses['total']:>8.6f}",
-                "diff": f"{losses['diff']:>8.6f}",
-                "recon": f"{losses['recon']:>8.6f}",
+                'loss': f"{loss.item():>8.6f}",
+                'diff': f"{diffusion_loss.item():>8.6f}",
+                'recon': f"{recon_loss.item():>8.6f}",
+                'lr': f"{optimizer.param_groups[0]['lr']:.2e}"
             })
 
-        avg_total = total_loss_sum / num_batches
-        avg_diff = diff_loss_sum / num_batches
-        avg_recon = recon_loss_sum / num_batches
+        avg_loss = total_loss / dataloader_len
+        avg_diffusion = total_diffusion / dataloader_len
+        avg_recon = total_recon / dataloader_len
 
-        print(f"Epoch {epoch + 1} done | total: {avg_total:.6f} | diff: {avg_diff:.6f} | recon: {avg_recon:.6f}")
+        print(f"Epoch {epoch + 1} done | loss: {avg_loss:.6f} | diffusion: {avg_diffusion:.6f} | recon: {avg_recon:.6f}")
+
+        metrics = {
+            'loss': avg_loss.item(),
+            'diffusion': avg_diffusion.item(),
+            'recon': avg_recon.item(),
+            'lr': lr_scheduler.get_last_lr()[0] if lr_scheduler else optimizer.param_groups[0]['lr'],
+        }
+
+        log_metrics(
+            metrics,
+            log_path=f"logs/{model_name}.txt",
+            epoch=epoch + 1
+        )
 
         sample_and_log(
-            diffusion=model_dict['diffusion'],
-            decoder=model_dict['decoder'],
+            diffusion=diffusion,
+            decoder=decoder,
             tokenizer=tokenizer,
-            text_encoder=model_dict['text_encoder'],
+            text_encoder=text_encoder,
             scheduler=scheduler,
             device=device,
             epoch=epoch,
             save=True,
-            save_path='samples/diffusion/samples'
+            save_path=f"samples/diffusion/{model_name}/samples"
         )
 
         log_reconstructions(
-            encoder=model_dict['encoder'],
-            decoder=model_dict['decoder'],
+            encoder=encoder,
+            decoder=decoder,
             dataloader=dataloader,
             device=device,
             epoch=epoch,
             save=True,
-            save_path='samples/diffusion/vae_recon'
+            save_path=f"samples/diffusion/{model_name}/vae_recon"
         )
 
-        if (epoch + 1) % 5 == 0 or (epoch + 1 == start_epoch + epochs):
-            save_path = f'checkpoints/diffusion/epoch_{epoch + 1:04d}.pth'
-            save_checkpoint(model_dict, optimizer, epoch, save_path)
-
-        if not freeze_vae:
-            model_dict['decoder'].train()
-            model_dict['encoder'].train()
-
-        model_dict['diffusion'].train()
+        if (epoch + 1) % 5 == 0 or (epoch + 1 == args.epochs):
+            ckpt_path = f"checkpoints/diffusion/{model_name}/epoch_{epoch+1:04d}.pth"
+            save_checkpoint(models, optimizer, epoch, ckpt_path)
 
 
-if __name__ == '__main__':
+def main():
+    args = parse_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.set_float32_matmul_precision("high")
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    vae_checkpoint_path = 'checkpoints/vae-b/b-linear-scheduled/vae_epoch_0060.pth'
-    diffusion_checkpoint_path = 'checkpoints/diffusion/epoch_0005.pth'
+    project_root = Path(__file__).resolve().parents[1]
+    sys.path.append(str(project_root))
 
-    freeze_vae = True
-    resume_from_checkpoint = False
-
-    # Load models
+    global tokenizer
     tokenizer = CLIPTokenizer(
         vocab_file=str(project_root / 'data' / 'tokenizer' / 'vocab.json'),
         merges_file=str(project_root / 'data' / 'tokenizer' / 'merges.txt'),
     )
 
     text_encoder = CLIPTextModel.from_pretrained('openai/clip-vit-large-patch14').to(device)
-
     encoder = VAE_Encoder().to(device)
     decoder = VAE_Decoder().to(device)
     diffusion = Diffusion().to(device)
 
-    if os.path.exists(vae_checkpoint_path):
-        print(f"Loading VAE weights from {vae_checkpoint_path}")
-        vae_ckpt = torch.load(vae_checkpoint_path, map_location='cpu', weights_only=False)
-        encoder.load_state_dict(vae_ckpt['encoder'])
-        decoder.load_state_dict(vae_ckpt['decoder'])
+    if args.vae_ckpt and os.path.exists(args.vae_ckpt):
+        print('Loaded VAE weights!')
+        ckpt = torch.load(args.vae_ckpt, map_location='cpu', weights_only=False)
+        encoder.load_state_dict(ckpt['encoder'])
+        decoder.load_state_dict(ckpt['decoder'])
+  
+    if args.freeze_vae:
+        for p in encoder.parameters(): p.requires_grad = False
+        for p in decoder.parameters(): p.requires_grad = False
+    if not args.finetune_text:
+        for p in text_encoder.parameters(): p.requires_grad = False
 
-    if freeze_vae:
-        for p in encoder.parameters():
-            p.requires_grad = False
-        for p in decoder.parameters():
-            p.requires_grad = False
 
-    # Load dataset
-    dataset = EmojiDataset(project_root / 'data/emoji_dataset_128x128/emoji_dataset.json', image_size=128, tokenizer=tokenizer)
-    dataloader = DataLoader(dataset, batch_size=8, shuffle=True, drop_last=True)
+    dataset = EmojiDataset(project_root / 'data' / 'emoji_dataset_128x128' / 'emoji_dataset.json', image_size=128, tokenizer=tokenizer)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=4, pin_memory=True)
 
-    # Load number generator and scheduler
     generator = torch.Generator(device=device)
-    generator.manual_seed(42)
+    generator.manual_seed(args.seed)
 
-    scheduler = DDPMSampler(generator)
-    scheduler.set_inference_timesteps(num_inference_steps=50)
+    scheduler = DDPMSampler(generator, num_training_steps=args.num_train_steps).to(device)
+    scheduler.set_inference_timesteps(num_inference_steps=args.num_infer_steps)
 
-    # Define optimizer
-    if freeze_vae:
-        optimizer = torch.optim.AdamW(diffusion.parameters(), lr=1e-4)
-    else:
-        optimizer = torch.optim.AdamW(
-            list(encoder.parameters()) + list(decoder.parameters()) + list(diffusion.parameters()),
-            lr=1e-4
-        )
+    train_params = diffusion.parameters()
+
+    if not args.freeze_vae:
+        train_params = list(encoder.parameters()) + list(decoder.parameters()) + list(diffusion.parameters())
+
+    optimizer = torch.optim.AdamW(train_params, lr=args.lr)
+
+    total_steps = args.epochs * len(dataloader)
+    lr_scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=total_steps)
+
+    scaler = GradScaler()
 
     models = {
         'encoder': encoder,
         'decoder': decoder,
         'diffusion': diffusion,
-        'text_encoder': text_encoder
+        'text_encoder': text_encoder,
     }
 
     start_epoch = 0
 
-    if resume_from_checkpoint and os.path.exists(diffusion_checkpoint_path):
-        print(f"Loading Diffusion weights from {diffusion_checkpoint_path}")
-        start_epoch = load_checkpoint(models, optimizer, diffusion_checkpoint_path) + 1
-        print(f"Resuming from epoch {start_epoch}")
+    if args.resume and args.diffusion_ckpt and os.path.exists(args.diffusion_ckpt):
+        ckpt = torch.load(args.diffusion_ckpt, map_location='cpu', weights_only=False)
+        start_epoch = load_checkpoint(models, optimizer, args.diffusion_ckpt) + 1
 
-    train(models, dataloader, optimizer, scheduler, device, start_epoch=start_epoch, epochs=5)
+    train(
+        args.model_name,
+        models,
+        dataloader,
+        optimizer,
+        scheduler,
+        device,
+        lr_scheduler,
+        scaler,
+        args,
+        start_epoch,
+    )
+
+
+if __name__ == '__main__':
+    main()

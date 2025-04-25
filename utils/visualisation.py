@@ -8,7 +8,7 @@ from torchvision.transforms.functional import to_pil_image
 from IPython.display import display, Image as IPyImage
 
 
-def tensor_image_grid(tensor, title=None, prompts=None, vae_only=False, save=False, save_path=''):
+def tensor_image_grid(tensor, title=None, prompts=None, save=False, save_path=''):
     if save and save_path == '':
         raise ValueError('Invalid save path')
 
@@ -22,9 +22,6 @@ def tensor_image_grid(tensor, title=None, prompts=None, vae_only=False, save=Fal
     fig, ax = plt.subplots(figsize=(grid_image.shape[1] // 50, grid_image.shape[0] // 50))
     ax.imshow(grid_image, interpolation='nearest')
     ax.axis('off')
-
-    if vae_only:
-        ax.text(0, 0, 'VAE_ONLY', color='white', fontsize=12, backgroundcolor='black')
 
     if prompts:
         width = grid_image.shape[1] // len(prompts)
@@ -45,41 +42,45 @@ def tensor_image_grid(tensor, title=None, prompts=None, vae_only=False, save=Fal
 
 
 @torch.no_grad()
-def sample_and_log(diffusion, decoder, tokenizer, text_encoder, scheduler, device, epoch, save=False, save_path=''):
-    if save and save_path == '':
-        raise ValueError('Invalid save path')
+def sample_and_log(diffusion, decoder, tokenizer, text_encoder, scheduler, device, epoch: int, save: bool = False, save_path: str = ''):
+    if save and not save_path:
+        raise ValueError("Must provide a save_path when save=True")
 
     diffusion.eval()
     decoder.eval()
+    text_encoder.eval()
 
     prompts = ['happy cat', 'crying face', 'robot with heart eyes', 'surprised ghost']
     all_images = []
 
+    timesteps = scheduler.inference_timesteps.to(device)
+
     for prompt in prompts:
-        tokens = tokenizer(prompt, return_tensors='pt', padding='max_length', max_length=77, truncation=True)['input_ids'].to(device)
-        context_out = text_encoder(tokens)
-        context = context_out.last_hidden_state if hasattr(context_out, 'last_hidden_state') else context_out
+        tokens = tokenizer(prompt, return_tensors='pt', padding='max_length', max_length=77, truncation=True).input_ids.to(device)
+        context = text_encoder(tokens).last_hidden_state
+        latents = torch.randn(1, 4, 32, 32, device=device)
 
-        latents = torch.randn(1, 4, 32, 32).to(device)
+        for idx, t in enumerate(timesteps):
+            t_int = int(t)
+            t_tensor = torch.tensor([t_int], device=device)
 
-        for t in scheduler.timesteps:
-            time = torch.tensor([t], device=device)
-            noise_pred = diffusion(latents, context, time)
-            latents = scheduler.step(time[0], latents, noise_pred)
+            noise_pred = diffusion(latents, context, t_tensor)
+            latents = scheduler.step(latents, noise_pred, t_int, idx)
 
         image = decoder(latents)
         all_images.append(image)
 
-    all_images = torch.cat(all_images)
+    all_images = torch.cat(all_images, dim=0)
 
     if save:
-        save_path = os.path.join(save_path, f'epoch_{epoch+1:04d}.png')
+        os.makedirs(save_path, exist_ok=True)
+        out_file = os.path.join(save_path, f'epoch_{epoch+1:04d}.png')
 
-    tensor_image_grid(all_images, prompts=prompts, save=save, save_path=save_path)
+    tensor_image_grid(all_images, prompts=prompts, save=save, save_path=out_file)
 
 
 @torch.no_grad()
-def log_reconstructions(encoder, decoder, dataloader, device, epoch, vae_only=False, save=False, save_path=''):
+def log_reconstructions(encoder, decoder, dataloader, device, epoch, save=False, save_path=''):
     if save and save_path == '':
         raise ValueError('Invalid save path')
 
@@ -96,12 +97,9 @@ def log_reconstructions(encoder, decoder, dataloader, device, epoch, vae_only=Fa
     combined = torch.cat([images, recon_images], dim=0)
 
     if save:
-        if vae_only:
-            save_path = os.path.join(save_path, f"vae_recon_epoch_{epoch:04d}.png")
-        else:
-            save_path = os.path.join(save_path, f"epoch_{epoch+1:04d}_vae_recons.png")
+        save_path = os.path.join(save_path, f"epoch_{epoch+1:04d}_recons.png")
 
-    tensor_image_grid(combined, title='VAE Reconstructions', vae_only=vae_only, save=save, save_path=save_path)
+    tensor_image_grid(combined, title='VAE Reconstructions', save=save, save_path=save_path)
 
 
 @torch.no_grad()
@@ -127,7 +125,7 @@ def log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=Fa
     if save:
         save_path = os.path.join(save_path, f"epoch_{epoch+1:04d}_vae_recons.png")
 
-    tensor_image_grid(stacked, title='VAE Reconstructions', vae_only=True, save=save, save_path=save_path)
+    tensor_image_grid(stacked, title='VAE Reconstructions', save=save, save_path=save_path)
 
 
 @torch.no_grad()
@@ -138,19 +136,7 @@ def sample_from_vae(decoder, device, num_samples=8, save=False, save_path=''):
     decoder.eval()
     latents = torch.randn(num_samples, 4, 32, 32).to(device)
     images = decoder(latents)
-
-    tensor_image_grid(images, title='Random VAE Samples', vae_only=True, save=save, save_path=save_path)
-
-
-@torch.no_grad()
-def sample_from_vae_b(decoder, device, num_samples=8, save=False, save_path=''):
-    if save and save_path == '':
-        raise ValueError('Invalid save path')
-
-    decoder.eval()
-    latents = torch.randn(num_samples, 4, 32, 32).to(device)
-    images = decoder(latents)
-    tensor_image_grid(images, title='Random VAE Samples', vae_only=True, save=save, save_path=save_path)
+    tensor_image_grid(images, title='Random VAE Samples', save=save, save_path=save_path)
 
 
 @torch.no_grad()
@@ -174,42 +160,11 @@ def interpolate_vae(decoder, device, steps=8, epoch=None, save=False, save_path=
         filename = f"interpolation_epoch_{epoch:04d}.png" if epoch is not None else 'interpolation.png'
         save_path = os.path.join(save_path, filename)
 
-    tensor_image_grid(images, title='VAE Latent Interpolation', vae_only=True, save=save, save_path=save_path)
+    tensor_image_grid(images, title='VAE Latent Interpolation', save=save, save_path=save_path)
 
 
 @torch.no_grad()
 def interpolate_between_images(encoder, decoder, dataset, img1_id, img2_id, device, steps=8, epoch=None, save=False, save_path=''):
-    if save and save_path == '':
-        raise ValueError('Invalid save path')
-
-    encoder.eval()
-    decoder.eval()
-
-    img1 = dataset[img1_id]['image'].unsqueeze(0).to(device)
-    img2 = dataset[img2_id]['image'].unsqueeze(0).to(device)
-
-    noise = torch.randn(2, 4, 32, 32).to(device)
-    z1 = encoder(img1, noise[0:1])
-    z2 = encoder(img2, noise[1:2])
-
-    alphas = torch.linspace(0, 1, steps).to(device)
-
-    interpolated = torch.cat([
-        ((1 - alpha) * z1 + alpha * z2)
-        for alpha in alphas
-    ], dim=0)
-
-    decoded = decoder(interpolated)
-
-    if save:
-        filename = f"real_interpolation_epoch_{epoch:04d}.png" if epoch is not None else 'real_interpolation.png'
-        save_path = os.path.join(save_path, filename)
-
-    tensor_image_grid(decoded, title='VAE Interpolation Between Real Images', vae_only=True, save=save, save_path=save_path)
-
-
-@torch.no_grad()
-def interpolate_between_images_b(encoder, decoder, dataset, img1_id, img2_id, device, steps=8, epoch=None, save=False, save_path=''):
     encoder.eval()
     decoder.eval()
 
@@ -231,64 +186,11 @@ def interpolate_between_images_b(encoder, decoder, dataset, img1_id, img2_id, de
         filename = f"real_interpolation_epoch_{epoch:04d}.png" if epoch is not None else 'real_interpolation.png'
         save_path = os.path.join(save_path, filename)
 
-    tensor_image_grid(decoded, title='VAE Interpolation Between Real Images', vae_only=True, save=save, save_path=save_path)
+    tensor_image_grid(decoded, title='VAE Interpolation Between Real Images', save=save, save_path=save_path)
 
 
 @torch.no_grad()
 def interpolate_to_gif(encoder, decoder, dataset, img1_id, img2_id, device, steps=8, epoch=None, save=False, save_path=''):
-    if save and save_path == '':
-        raise ValueError('Invalid save path')
-
-    encoder.eval()
-    decoder.eval()
-
-    img1 = dataset[img1_id]['image'].unsqueeze(0).to(device)
-    img2 = dataset[img2_id]['image'].unsqueeze(0).to(device)
-
-    noise = torch.randn(1, 4, 32, 32).to(device)
-    z1 = encoder(img1, noise)
-    z2 = encoder(img2, noise)
-
-    alphas = torch.linspace(0, 1, steps).to(device)
-    latents = torch.stack([(1 - a) * z1 + a * z2 for a in alphas], dim=0).squeeze(1)
-
-    decoded = decoder(latents)
-    decoded = (decoded.clamp(-1, 1) + 1) / 2
-
-    frames = [to_pil_image(img.cpu()) for img in decoded]
-
-    total_duration_ms = 2500
-    frame_duration = max(50, total_duration_ms // steps)
-
-    if save:
-        filename = f"interpolation_epoch_{epoch:04d}.gif" if epoch is not None else "interpolation.gif"
-        gif_path = os.path.join(save_path, filename)
-
-    if save:
-        frames[0].save(
-            gif_path,
-            format="GIF",
-            append_images=frames[1:],
-            save_all=True,
-            duration=frame_duration,
-            loop=0
-        )
-    else:
-        buf = io.BytesIO()
-        frames[0].save(
-            buf,
-            format="GIF",
-            append_images=frames[1:],
-            save_all=True,
-            duration=frame_duration,
-            loop=0
-        )
-        buf.seek(0)
-        display(IPyImage(data=buf.getvalue()))
-
-
-@torch.no_grad()
-def interpolate_to_gif_b(encoder, decoder, dataset, img1_id, img2_id, device, steps=8, epoch=None, save=False, save_path=''):
     encoder.eval()
     decoder.eval()
 
