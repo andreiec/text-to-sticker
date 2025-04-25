@@ -51,6 +51,7 @@ def train(
     model_name: str,
     models: dict,
     dataloader: DataLoader,
+    tokenizer: CLIPTokenizer,
     optimizer: torch.optim.Optimizer,
     scheduler: DDPMSampler,
     device: torch.device,
@@ -188,10 +189,6 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    project_root = Path(__file__).resolve().parents[1]
-    sys.path.append(str(project_root))
-
-    global tokenizer
     tokenizer = CLIPTokenizer(
         vocab_file=str(project_root / 'data' / 'tokenizer' / 'vocab.json'),
         merges_file=str(project_root / 'data' / 'tokenizer' / 'merges.txt'),
@@ -253,6 +250,7 @@ def main():
         args.model_name,
         models,
         dataloader,
+        tokenizer,
         optimizer,
         scheduler,
         device,

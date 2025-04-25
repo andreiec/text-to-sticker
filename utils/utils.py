@@ -27,7 +27,8 @@ def load_checkpoint(models, optimizer, path):
     if 'diffusion' in checkpoint and 'diffusion' in models:
         models['diffusion'].load_state_dict(checkpoint['diffusion'])
 
-    optimizer.load_state_dict(checkpoint['optimizer'])
+    if optimizer:
+        optimizer.load_state_dict(checkpoint['optimizer'])
     return checkpoint['epoch']
 
 
