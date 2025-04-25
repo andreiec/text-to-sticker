@@ -8,7 +8,7 @@ from torchvision import transforms
 
 
 class EmojiDataset(Dataset):
-    def __init__(self, json_path, image_size=128, tokenize=True, tokenizer=None, max_length=77):
+    def __init__(self, json_path, image_size=128, tokenize=True, tokenizer=None, max_length=77, augment=False):
         self.json_path = Path(json_path)
         self.root_dir = self.json_path.parent
         self.tokenize = tokenize
@@ -31,7 +31,16 @@ class EmojiDataset(Dataset):
             and item.get('description', '').lower() not in excluded_descriptions
         ]
 
+        aug = []
+
+        if augment:
+            aug += [
+                T.RandomHorizontalFlip(p=0.5),
+                T.RandomRotation(10, fill=255),
+            ]
+
         self.transform = T.Compose([
+            *aug,
             T.Resize((image_size, image_size)),
             T.ToTensor(),
             transforms.Normalize([0.5], [0.5])

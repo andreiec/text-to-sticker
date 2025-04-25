@@ -65,7 +65,7 @@ def train(
     decoder = models['decoder']
     diffusion = models['diffusion']
     text_encoder = models['text_encoder']
-    dataloader_len = len(dataloader)
+    total_steps = len(dataloader)
 
     for epoch in range(start_epoch, args.epochs):
         diffusion.train()
@@ -131,11 +131,9 @@ def train(
                 'lr': f"{optimizer.param_groups[0]['lr']:.2e}"
             })
 
-        avg_loss = total_loss / dataloader_len
-        avg_diffusion = total_diffusion / dataloader_len
-        avg_recon = total_recon / dataloader_len
-
-        print(f"Epoch {epoch + 1} done | loss: {avg_loss:.6f} | diffusion: {avg_diffusion:.6f} | recon: {avg_recon:.6f}")
+        avg_loss = total_loss / total_steps
+        avg_diffusion = total_diffusion / total_steps
+        avg_recon = total_recon / total_steps
 
         metrics = {
             'loss': avg_loss.item(),

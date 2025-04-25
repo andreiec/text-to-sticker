@@ -11,6 +11,7 @@ import torch
 from torchvision.utils import make_grid, save_image
 from transformers import CLIPTokenizer, CLIPTextModel
 from diffusers import EulerDiscreteScheduler
+from typing import Any
 
 from src.encoder import VAE_Encoder
 from src.decoder import VAE_Decoder
@@ -31,12 +32,12 @@ def parse_args():
 
 def sample_diffusion(
     models: dict,
+    scheduler: Any,
     tokenizer: CLIPTokenizer,
     prompts: list[str],
     guidance_scale: float,
-    num_infer_steps: int,
     output_path: str,
-    device: torch.device,
+    device: torch.device
 ):
 
     encoder = models['encoder']
@@ -48,15 +49,6 @@ def sample_diffusion(
     decoder.eval()
     diffusion.eval()
     text_encoder.eval()
-
-    scheduler = EulerDiscreteScheduler(
-            beta_start=0.00085,
-            beta_end=0.0120,
-            beta_schedule='scaled_linear',
-            num_train_timesteps=1000,
-        )
-
-    scheduler.set_timesteps(num_infer_steps, device=device)
 
     batch_size = len(prompts)
     token_ids = tokenizer(prompts, return_tensors='pt', padding='max_length', max_length=77, truncation=True).input_ids.to(device)
@@ -113,17 +105,11 @@ def main():
         'text_encoder': text_encoder,
     }
 
-    load_checkpoint(models, optimizer=None, path=args.ckpt)
+    scheduler = EulerDiscreteScheduler(beta_start=0.00085, beta_end=0.0120, beta_schedule='scaled_linear', num_train_timesteps=1000)
+    scheduler.set_timesteps(args.steps, device=device)
 
-    sample_diffusion(
-        models,
-        tokenizer,
-        args.prompts,
-        args.gscale,
-        args.steps,
-        args.out,
-        args.device
-    )
+    load_checkpoint(models, optimizer=None, path=args.ckpt)
+    sample_diffusion(models, scheduler, tokenizer, args.prompts, args.gscale, args.out, args.device)
 
 
 if __name__ == '__main__':

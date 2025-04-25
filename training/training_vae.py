@@ -4,13 +4,18 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parents[1]
 sys.path.append(str(project_root))
 
-import torch
-import torch.nn.functional as F
-
 import matplotlib
 matplotlib.use('Agg')
 
+import os
+import random
+import numpy as np
+import argparse
+import torch
+import torch.nn.functional as F
+
 from torch.utils.data import DataLoader
+from torch.amp import autocast, GradScaler
 from tqdm import tqdm
 
 from src.encoder import VAE_Encoder
@@ -21,124 +26,170 @@ from utils.visualisation import sample_from_vae, log_reconstructions_vae
 from utils.utils import kl_divergence, load_checkpoint, log_metrics, reparameterize, save_checkpoint
 
 
-def train_step(batch, encoder, decoder, optimizer, device, beta=1e-4):
-    images = batch['image'].to(device)
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train a VAE on emoji dataset')
+    parser.add_argument('--model_name', type=str, default='vae-1.0')
+    parser.add_argument('--data_json', type=str, default='data/emoji_dataset_128x128/emoji_dataset.json', help='Path to dataset JSON')
+    parser.add_argument('--image_size', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--epochs', type=int, default=70)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--augment', action='store_true', help='Enable data augmentation')
+    parser.add_argument('--beta_max', type=float, default=1e-4, help='Maximum weight for KL term')
+    parser.add_argument('--beta_strategy', type=str, choices=['constant', 'linear', 'sigmoid'], default='sigmoid', help='KL annealing strategy')
+    parser.add_argument('--beta_mid', type=int, default=20, help='Midpoint epoch for sigmoid annealing')
+    parser.add_argument('--beta_steepness', type=float, default=0.3, help='Steepness for sigmoid annealing')
+    parser.add_argument('--warmup_steps', type=int, default=None, help='Optional LR warmup steps for scheduler')
+    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints/vae')
+    parser.add_argument('--log_dir', type=str, default='logs')
+    parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--seed', type=int, default=42)
+    return parser.parse_args()
 
-    mu, logvar = encoder(images)
-    z = reparameterize(mu, logvar)
-    recons = decoder(z)
 
-    recon_loss = F.mse_loss(recons, images)
-    kl_loss = kl_divergence(mu, logvar)
-
-    loss = recon_loss + beta * kl_loss
-
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-
-    return loss.item(), recon_loss.item(), kl_loss.item()
-
-
-def train(model_name, encoder, decoder, dataloader, optimizer, device, start_epoch=0, epochs=10, beta=1e-4, beta_scheduler=None, lr_scheduler=None):
+def train(
+    args,
+    encoder,
+    decoder,
+    dataloader,
+    optimizer,
+    device,
+    beta_scheduler,
+    lr_scheduler=None,
+    start_epoch=0
+):
     encoder.train()
     decoder.train()
 
-    for epoch in range(start_epoch, start_epoch + epochs):
-        print(f"Epoch {epoch + 1} / {start_epoch + epochs}")
+    scaler = GradScaler()
+    total_steps = len(dataloader)
 
-        pbar = tqdm(dataloader, ncols=160)
-        beta = beta_scheduler(epoch) if beta_scheduler else beta
-        total_loss = total_recon = total_kl = 0.0
+    for epoch in range(start_epoch, args.epochs):
+        beta = beta_scheduler(epoch)
+        epoch_loss = epoch_recon = epoch_kl = 0.0
 
-        for batch in pbar:
-            loss, recon, kl = train_step(batch, encoder, decoder, optimizer, device, beta)
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{args.epochs}", ncols=160)
 
-            total_loss += loss
-            total_recon += recon
-            total_kl += kl
+        for step, batch in enumerate(pbar):
+            with autocast(device_type=device.type):
+                images = batch['image'].to(device)
+
+                mu, logvar = encoder(images)
+                z = reparameterize(mu, logvar)
+                recons = decoder(z)
+
+                recon_loss = F.mse_loss(recons, images)
+                kl_loss = kl_divergence(mu, logvar)
+                loss = recon_loss + beta * kl_loss
+
+            optimizer.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+
+            torch.nn.utils.clip_grad_norm_(list(encoder.parameters()) + list(decoder.parameters()), max_norm=1.0)
+
+            scaler.step(optimizer)
+            scaler.update()
 
             if lr_scheduler:
                 lr_scheduler.step()
 
+            epoch_loss += loss.item()
+            epoch_recon += recon_loss.item()
+            epoch_kl += kl_loss.item()
+
             pbar.set_postfix({
-                'loss': f"{loss:>8.6f}",
-                'recon': f"{recon:>8.6f}",
-                'kl': f"{kl:>8.6f}",
-                'kl_scaled': f"{kl*beta:>8.6f}",
-                'lr': f"{lr_scheduler.get_last_lr()[0] if lr_scheduler else optimizer.param_groups[0]['lr']:>8.6f}",
-                'beta': f"{beta:>8.6f}"
+                'loss': f"{loss:.6f}",
+                'recon': f"{recon_loss:.6f}",
+                'kl': f"{kl_loss:.6f}",
+                'kl_scaled': f"{kl_loss * beta:.6f}",
+                'beta': f"{beta:.6f}",
+                'lr': f"{optimizer.param_groups[0]['lr']:.2e}" if lr_scheduler else 'NA'
             })
 
-        avg_loss = total_loss / len(dataloader)
-        avg_recon = total_recon / len(dataloader)
-        avg_kl = total_kl / len(dataloader)
-
-        print(f"Epoch {epoch + 1} done | loss: {avg_loss:.6f} | recon: {avg_recon:.6f} | kl: {avg_kl:.6f}")
-
-        reconstructions_path = f"samples/vae-b/{model_name}/recons"
-        sample_path = f"samples/vae-b/{model_name}/samples/epoch_{epoch + 1:04d}.png"
-        checkpoint_path = f"checkpoints/vae-b/{model_name}/vae_epoch_{epoch+1:04d}.pth"
-        log_path = f"logs/{model_name}.txt"
+        avg_loss = epoch_loss / total_steps
+        avg_recon = epoch_recon / total_steps
+        avg_kl = epoch_kl / total_steps
 
         metrics = {
             'loss': avg_loss,
             'recon': avg_recon,
             'kl': avg_kl,
             'kl_scaled': avg_kl * beta,
-            'lr': lr_scheduler.get_last_lr()[0] if lr_scheduler else optimizer.param_groups[0]['lr'],
-            'beta': beta
+            'beta': beta,
+            'lr': optimizer.param_groups[0]['lr']
         }
 
-        log_metrics(metrics, log_path=log_path, epoch=epoch + 1)
-        log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=True, save_path=reconstructions_path)
-        sample_from_vae(decoder, device, num_samples=8, save=True, save_path=sample_path)
+        os.makedirs(args.log_dir, exist_ok=True)
+        log_metrics(metrics, log_path=os.path.join(args.log_dir, f"{args.model_name}.txt"), epoch=epoch+1)
 
-        if (epoch + 1) % 5 == 0 or (epoch + 1) == (start_epoch + epochs):
-            save_checkpoint({'encoder': encoder, 'decoder': decoder}, optimizer, epoch, checkpoint_path, vae_only=True)
+        recon_dir = f"samples/vae/{args.model_name}/recons"
+        sample_dir = f"samples/vae/{args.model_name}/samples"
+        ckpt_dir = os.path.join(args.checkpoint_dir, args.model_name)
 
-        encoder.train()
-        decoder.train()
+        os.makedirs(ckpt_dir, exist_ok=True)
+        log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=True, save_path=recon_dir)
+        sample_from_vae(decoder, device, num_samples=8, save=True, save_path=os.path.join(sample_dir, f"epoch_{epoch+1:04d}.png"))
+
+        if (epoch+1) % 5 == 0 or (epoch+1) == args.epochs:
+            ckpt_path = os.path.join(ckpt_dir, f"vae_epoch_{epoch+1:04d}.pth")
+            save_checkpoint({'encoder': encoder, 'decoder': decoder}, optimizer, epoch, ckpt_path, vae_only=True)
+
+    print('Training complete.')
 
 
-if __name__ == '__main__':
+def main():
+    args = parse_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     encoder = VAE_Encoder().to(device)
     decoder = VAE_Decoder().to(device)
 
-    dataset = EmojiDataset(project_root / 'data' / 'emoji_dataset_128x128' / 'emoji_dataset.json', image_size=128, tokenize=False)
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
+    project_root = Path(__file__).resolve().parents[1]
+    data_json = project_root / args.data_json
+    dataset = EmojiDataset(data_json, image_size=args.image_size, tokenize=False, augment=args.augment)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
 
-    models = {
-        'encoder': encoder,
-        'decoder': decoder
-    }
+    optimizer = torch.optim.AdamW(
+        list(encoder.parameters()) + list(decoder.parameters()), lr=args.lr
+    )
 
-    model_name = 'b-sigmoid-3'
-    checkpoint_path = project_root / 'checkpoints/vae-b' / model_name / 'vae_epoch_0020.pth'
+    lr_scheduler = None
+
+    if args.warmup_steps:
+        total_iters = args.epochs * len(dataloader)
+        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_iters, eta_min=1e-6)
+
+    beta_scheduler = KLAnnealingScheduler(max_beta=args.beta_max, strategy=args.beta_strategy, mid_epoch=args.beta_mid, steepness=args.beta_steepness)
 
     start_epoch = 0
-    total_epochs = 70
-    resume = False
 
-    optimizer = torch.optim.AdamW(list(encoder.parameters()) + list(decoder.parameters()), lr=1e-4)
+    if args.resume:
+        ckpt_path = Path(args.checkpoint_dir) / args.model_name / f"vae_epoch_{args.epochs:04d}.pth"
 
-    # lr_scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=10, num_training_steps=total_epochs * len(dataloader))
-    beta_scheduler = KLAnnealingScheduler(max_beta=1e-4, strategy='sigmoid', mid_epoch=20, steepness=0.3)
+        if ckpt_path.exists():
+            start_epoch = load_checkpoint({'encoder':encoder, 'decoder':decoder}, optimizer, ckpt_path) + 1
+            print(f"Resumed from epoch {start_epoch}")
 
-    if resume:
-        start_epoch = load_checkpoint(models, optimizer, checkpoint_path) + 1
-        print(f"Resumed from checkpoint: epoch {start_epoch}")
-
-    train(model_name,
-          encoder,
-          decoder,
-          dataloader,
-          optimizer,
-          device,
-          start_epoch=start_epoch,
-          epochs=total_epochs,
-          lr_scheduler=None,
-          beta_scheduler=beta_scheduler
+    train(
+        args,
+        encoder,
+        decoder,
+        dataloader,
+        optimizer,
+        device,
+        beta_scheduler,
+        lr_scheduler,
+        start_epoch
     )
+
+
+if __name__ == '__main__':
+    main()
