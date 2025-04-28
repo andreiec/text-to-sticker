@@ -23,7 +23,7 @@ from src.decoder import VAE_Decoder
 from utils.dataset import EmojiDataset
 from utils.scheluder import KLAnnealingScheduler
 from utils.visualisation import sample_from_vae, log_reconstructions_vae
-from utils.utils import kl_divergence, load_checkpoint, log_metrics, reparameterize, save_checkpoint
+from utils.utils import compute_recon_loss, kl_divergence, load_checkpoint, log_metrics, reparameterize, save_checkpoint
 
 
 def parse_args():
@@ -40,8 +40,11 @@ def parse_args():
     parser.add_argument('--beta_mid', type=int, default=20, help='Midpoint epoch for sigmoid annealing')
     parser.add_argument('--beta_steepness', type=float, default=0.3, help='Steepness for sigmoid annealing')
     parser.add_argument('--warmup_steps', type=int, default=None, help='Optional LR warmup steps for scheduler')
-    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints/vae')
+    parser.add_argument('--checkpoint_path', type=str, default='checkpoints/vae')
+    parser.add_argument('--checkpoint_name', type=str, default='')
     parser.add_argument('--log_dir', type=str, default='logs')
+    parser.add_argument('--log_samples', action='store_true', help='Sample VAE every epoch')
+    parser.add_argument('--log_recons', action='store_true', help='Plot reconstructions')
     parser.add_argument('--resume', action='store_true')
     parser.add_argument('--seed', type=int, default=42)
     return parser.parse_args()
@@ -63,9 +66,14 @@ def train(
 
     scaler = GradScaler()
     total_steps = len(dataloader)
+    
+    c_max = 10
+    c_warm = 10
 
     for epoch in range(start_epoch, args.epochs):
-        beta = beta_scheduler(epoch)
+        # beta = beta_scheduler(epoch)
+        beta = args.beta_max
+        capacity = c_max * min(1.0, (epoch + 1) / c_warm)
         epoch_loss = epoch_recon = epoch_kl = 0.0
 
         pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{args.epochs}", ncols=160)
@@ -78,9 +86,11 @@ def train(
                 z = reparameterize(mu, logvar)
                 recons = decoder(z)
 
-                recon_loss = F.mse_loss(recons, images)
+                recon_loss = compute_recon_loss(images, recons)
                 kl_loss = kl_divergence(mu, logvar)
-                loss = recon_loss + beta * kl_loss
+                kl_residual = torch.clamp(kl_loss - capacity, min=0.0)
+                # loss = recon_loss + beta * kl_loss
+                loss = recon_loss + beta * kl_residual
 
             optimizer.zero_grad()
             scaler.scale(loss).backward()
@@ -102,8 +112,9 @@ def train(
                 'loss': f"{loss:.6f}",
                 'recon': f"{recon_loss:.6f}",
                 'kl': f"{kl_loss:.6f}",
-                'kl_scaled': f"{kl_loss * beta:.6f}",
-                'beta': f"{beta:.6f}",
+                'C*': f"{capacity:.2f}",
+                'beta': f"{beta:.1e}",
+                'nats/d': f"{kl_loss.item() / 4096:.4e}",
                 'lr': f"{optimizer.param_groups[0]['lr']:.2e}" if lr_scheduler else 'NA'
             })
 
@@ -115,7 +126,7 @@ def train(
             'loss': avg_loss,
             'recon': avg_recon,
             'kl': avg_kl,
-            'kl_scaled': avg_kl * beta,
+            'nats/dim': kl_loss.item() / 4096,
             'beta': beta,
             'lr': optimizer.param_groups[0]['lr']
         }
@@ -125,11 +136,15 @@ def train(
 
         recon_dir = f"samples/vae/{args.model_name}/recons"
         sample_dir = f"samples/vae/{args.model_name}/samples"
-        ckpt_dir = os.path.join(args.checkpoint_dir, args.model_name)
+        ckpt_dir = os.path.join(args.checkpoint_path, args.model_name)
 
         os.makedirs(ckpt_dir, exist_ok=True)
-        log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=True, save_path=recon_dir)
-        sample_from_vae(decoder, device, num_samples=8, save=True, save_path=os.path.join(sample_dir, f"epoch_{epoch+1:04d}.png"))
+
+        if args.log_samples:
+            sample_from_vae(decoder, device, num_samples=8, save=True, save_path=os.path.join(sample_dir, f"epoch_{epoch+1:04d}.png"))
+
+        if args.log_recons:
+            log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=True, save_path=recon_dir)
 
         if (epoch+1) % 5 == 0 or (epoch+1) == args.epochs:
             ckpt_path = os.path.join(ckpt_dir, f"vae_epoch_{epoch+1:04d}.pth")
@@ -172,11 +187,11 @@ def main():
     start_epoch = 0
 
     if args.resume:
-        ckpt_path = Path(args.checkpoint_dir) / args.model_name / f"vae_epoch_{args.epochs:04d}.pth"
+        ckpt_path = Path(args.checkpoint_path) / args.model_name / args.checkpoint_name
 
         if ckpt_path.exists():
             start_epoch = load_checkpoint({'encoder':encoder, 'decoder':decoder}, optimizer, ckpt_path) + 1
-            print(f"Resumed from epoch {start_epoch}")
+            print(f"Resumed from epoch {start_epoch}.")
 
     train(
         args,

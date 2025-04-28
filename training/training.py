@@ -14,10 +14,12 @@ import torch.nn.functional as F
 import matplotlib
 matplotlib.use('Agg')
 
+from diffusers import DDIMScheduler
 from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
-from transformers import CLIPTokenizer, CLIPTextModel, get_cosine_schedule_with_warmup
+from transformers import CLIPTokenizer, CLIPTextModel
 from tqdm import tqdm
+from typing import Any
 
 from src.ddpm import DDPMSampler
 from src.encoder import VAE_Encoder
@@ -25,7 +27,7 @@ from src.decoder import VAE_Decoder
 from src.diffusion import Diffusion
 from utils.dataset import EmojiDataset
 from utils.visualisation import log_reconstructions, sample_and_log
-from utils.utils import load_checkpoint, log_metrics, save_checkpoint
+from utils.utils import create_scheduler, load_checkpoint, log_metrics, save_checkpoint
 
 
 def parse_args():
@@ -36,12 +38,16 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--lr_scheduler", type=str, default="constant", choices=["cosine", "constant", "linear"], help="Type of learning rate scheduler")
     parser.add_argument("--warmup_steps", type=int, default=500)
     parser.add_argument("--num_train_steps", type=int, default=1000)
     parser.add_argument("--num_infer_steps", type=int, default=50)
+    parser.add_argument('--augment', action='store_true', help='Enable data augmentation')
     parser.add_argument("--recon_loss_weight", type=float, default=1.0)
     parser.add_argument("--freeze_vae", action="store_true")
     parser.add_argument("--finetune_text", action="store_true")
+    parser.add_argument('--log_samples', action='store_true', help='Sample diffusion every 5 epochs')
+    parser.add_argument('--log_recons', action='store_true', help='Plot reconstructions')
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     return parser.parse_args()
@@ -53,9 +59,10 @@ def train(
     dataloader: DataLoader,
     tokenizer: CLIPTokenizer,
     optimizer: torch.optim.Optimizer,
-    scheduler: DDPMSampler,
+    train_scheduler: Any,
+    infer_scheduler: Any,
     device: torch.device,
-    lr_scheduler,
+    lr_scheduler: Any,
     scaler: GradScaler,
     args,
     start_epoch: int = 0,
@@ -94,18 +101,19 @@ def train(
 
             with autocast(device_type=device.type):
                 mu, _ = encoder(images)
-                latents = mu * 0.18215
+                latents = mu / 2.4868746 # Funky number hack
 
                 bsz = latents.size(0)
-                timesteps = scheduler.sample_train_timesteps(bsz, device)
+                timesteps = train_scheduler.sample_train_timesteps(bsz, device)
                 true_noise = torch.randn_like(latents)
-                noisy_latents = scheduler.add_noise(latents, timesteps, noise=true_noise)
+                noisy_latents = train_scheduler.add_noise(latents, timesteps, noise=true_noise)
 
                 pred_noise = diffusion(noisy_latents, context, timesteps)
                 diffusion_loss = F.mse_loss(pred_noise, true_noise)
 
                 with torch.no_grad():
-                    recon_images = decoder(latents)
+                    recon_images = decoder(mu)
+                    recon_images = recon_images.clamp(-1, 1)
 
                 recon_loss = F.mse_loss(recon_images, images)
                 loss = diffusion_loss + args.recon_loss_weight * recon_loss
@@ -142,37 +150,36 @@ def train(
             'lr': lr_scheduler.get_last_lr()[0] if lr_scheduler else optimizer.param_groups[0]['lr'],
         }
 
-        log_metrics(
-            metrics,
-            log_path=f"logs/{model_name}.txt",
-            epoch=epoch + 1
-        )
-
-        sample_and_log(
-            diffusion=diffusion,
-            decoder=decoder,
-            tokenizer=tokenizer,
-            text_encoder=text_encoder,
-            scheduler=scheduler,
-            device=device,
-            epoch=epoch,
-            save=True,
-            save_path=f"samples/diffusion/{model_name}/samples"
-        )
-
-        log_reconstructions(
-            encoder=encoder,
-            decoder=decoder,
-            dataloader=dataloader,
-            device=device,
-            epoch=epoch,
-            save=True,
-            save_path=f"samples/diffusion/{model_name}/vae_recon"
-        )
+        log_metrics(metrics, log_path=f"logs/diffusion/{model_name}.txt", epoch=epoch+1)
 
         if (epoch + 1) % 5 == 0 or (epoch + 1 == args.epochs):
+            if args.log_samples:
+                sample_and_log(
+                    diffusion=diffusion,
+                    decoder=decoder,
+                    tokenizer=tokenizer,
+                    text_encoder=text_encoder,
+                    scheduler=infer_scheduler,
+                    device=device,
+                    epoch=epoch,
+                    save=True,
+                    save_path=f"samples/diffusion/{model_name}/samples",
+                    seed=args.seed
+                )
+
+            if args.log_recons:
+                log_reconstructions(
+                    encoder=encoder,
+                    decoder=decoder,
+                    dataloader=dataloader,
+                    device=device,
+                    epoch=epoch,
+                    save=True,
+                    save_path=f"samples/diffusion/{model_name}/vae_recon"
+                )
+
             ckpt_path = f"checkpoints/diffusion/{model_name}/epoch_{epoch+1:04d}.pth"
-            save_checkpoint(models, optimizer, epoch, ckpt_path)
+            save_checkpoint(models, optimizer, scaler, epoch, ckpt_path)
 
 
 def main():
@@ -198,7 +205,7 @@ def main():
     diffusion = Diffusion().to(device)
 
     if args.vae_ckpt and os.path.exists(args.vae_ckpt):
-        print('Loaded VAE weights!')
+        print('Loaded VAE weights.')
         ckpt = torch.load(args.vae_ckpt, map_location='cpu', weights_only=False)
         encoder.load_state_dict(ckpt['encoder'])
         decoder.load_state_dict(ckpt['decoder'])
@@ -216,8 +223,9 @@ def main():
     generator = torch.Generator(device=device)
     generator.manual_seed(args.seed)
 
-    scheduler = DDPMSampler(generator, num_training_steps=args.num_train_steps).to(device)
-    scheduler.set_inference_timesteps(num_inference_steps=args.num_infer_steps)
+    train_scheduler = DDPMSampler(generator, num_training_steps=args.num_train_steps).to(device)
+    infer_scheduler = DDIMScheduler(beta_start=0.00085, beta_end=0.0120, beta_schedule="scaled_linear", num_train_timesteps=1000, clip_sample=False, set_alpha_to_one=False)
+    infer_scheduler.set_timesteps(args.num_infer_steps, device=device)
 
     train_params = diffusion.parameters()
 
@@ -225,10 +233,6 @@ def main():
         train_params = list(encoder.parameters()) + list(decoder.parameters()) + list(diffusion.parameters())
 
     optimizer = torch.optim.AdamW(train_params, lr=args.lr)
-
-    total_steps = args.epochs * len(dataloader)
-    lr_scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps=total_steps)
-
     scaler = GradScaler()
 
     models = {
@@ -242,7 +246,18 @@ def main():
 
     if args.resume and args.diffusion_ckpt and os.path.exists(args.diffusion_ckpt):
         ckpt = torch.load(args.diffusion_ckpt, map_location='cpu', weights_only=False)
-        start_epoch = load_checkpoint(models, optimizer, args.diffusion_ckpt) + 1
+        start_epoch = load_checkpoint(models, optimizer, scaler, args.diffusion_ckpt) + 1
+        print(f"Resumed from epoch {start_epoch}.")
+
+    total_steps = args.epochs * len(dataloader)
+
+    lr_scheduler = create_scheduler(
+        optimizer,
+        args.lr_scheduler,
+        args.warmup_steps,
+        total_steps,
+        start_epoch=start_epoch * len(dataloader)
+    )
 
     train(
         args.model_name,
@@ -250,7 +265,8 @@ def main():
         dataloader,
         tokenizer,
         optimizer,
-        scheduler,
+        train_scheduler,
+        infer_scheduler,
         device,
         lr_scheduler,
         scaler,

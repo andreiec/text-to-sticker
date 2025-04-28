@@ -93,7 +93,7 @@ class VAE_Decoder(nn.Sequential):
         )
     
     def forward(self, x):
-        x = x / 0.18215
+        # x = x / 0.18215
 
         for module in self:
             x = module(x)

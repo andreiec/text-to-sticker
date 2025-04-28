@@ -10,7 +10,7 @@ import torch
 
 from torchvision.utils import make_grid, save_image
 from transformers import CLIPTokenizer, CLIPTextModel
-from diffusers import EulerDiscreteScheduler
+from diffusers import EulerDiscreteScheduler, DPMSolverMultistepScheduler
 from typing import Any
 
 from src.encoder import VAE_Encoder
@@ -73,6 +73,7 @@ def sample_diffusion(
             out = scheduler.step(model_output=eps_pred, timestep=t, sample=latents)
             latents = out.prev_sample
         
+        latents = latents * 2.4868746 # Funky number again
         images = decoder(latents)
 
     images = images.clamp(-1.0, 1.0).add(1.0).div(2.0)
@@ -105,7 +106,8 @@ def main():
         'text_encoder': text_encoder,
     }
 
-    scheduler = EulerDiscreteScheduler(beta_start=0.00085, beta_end=0.0120, beta_schedule='scaled_linear', num_train_timesteps=1000)
+    # scheduler = EulerDiscreteScheduler(beta_start=0.00085, beta_end=0.0120, beta_schedule='scaled_linear', num_train_timesteps=1000)
+    scheduler = DPMSolverMultistepScheduler(beta_start=0.00085, beta_end=0.0120, beta_schedule="scaled_linear", num_train_timesteps=1000)
     scheduler.set_timesteps(args.steps, device=device)
 
     load_checkpoint(models, optimizer=None, path=args.ckpt)

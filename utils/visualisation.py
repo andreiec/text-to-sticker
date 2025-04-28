@@ -42,7 +42,13 @@ def tensor_image_grid(tensor, title=None, prompts=None, save=False, save_path=''
 
 
 @torch.no_grad()
-def sample_and_log(diffusion, decoder, tokenizer, text_encoder, scheduler, device, epoch: int, save: bool = False, save_path: str = ''):
+def sample_and_log(
+    diffusion, decoder, tokenizer, text_encoder,
+    scheduler, device, epoch: int,
+    save: bool = False, save_path: str = "",
+    guidance_scale: float = 2.5,
+    seed: int = None
+):
     if save and not save_path:
         raise ValueError("Must provide a save_path when save=True")
 
@@ -51,32 +57,48 @@ def sample_and_log(diffusion, decoder, tokenizer, text_encoder, scheduler, devic
     text_encoder.eval()
 
     prompts = ['happy cat', 'crying face', 'robot with heart eyes', 'surprised ghost']
-    all_images = []
+    B = len(prompts)
 
-    timesteps = scheduler.inference_timesteps.to(device)
+    token_ids = tokenizer(prompts, return_tensors="pt", padding="max_length", max_length=77, truncation=True).input_ids.to(device)
+    uncond_ids = tokenizer([""]*B, return_tensors="pt", padding="max_length", max_length=77, truncation=True).input_ids.to(device)
 
-    for prompt in prompts:
-        tokens = tokenizer(prompt, return_tensors='pt', padding='max_length', max_length=77, truncation=True).input_ids.to(device)
-        context = text_encoder(tokens).last_hidden_state
-        latents = torch.randn(1, 4, 32, 32, device=device)
+    with torch.no_grad():
+        context = text_encoder(token_ids).last_hidden_state
+        uncond_context = text_encoder(uncond_ids).last_hidden_state
 
-        for idx, t in enumerate(timesteps):
+        if seed is not None:
+            generator = torch.Generator(device=device)
+            generator.manual_seed(seed)
+        else:
+            generator = None
+
+        latents = torch.randn(B, 4, 32, 32, device=device, generator=generator)
+
+        for idx, t in enumerate(scheduler.timesteps):
             t_int = int(t)
-            t_tensor = torch.tensor([t_int], device=device)
+            t_tensor = torch.full((B,), t_int, device=device, dtype=torch.long)
 
-            noise_pred = diffusion(latents, context, t_tensor)
-            latents = scheduler.step(latents, noise_pred, t_int, idx)
+            model_in = scheduler.scale_model_input(latents, t)
 
-        image = decoder(latents)
-        all_images.append(image)
+            eps_uncond = diffusion(model_in, uncond_context, t_tensor)
+            eps_cond = diffusion(model_in, context,       t_tensor)
+            eps = eps_uncond + guidance_scale * (eps_cond - eps_uncond)
 
-    all_images = torch.cat(all_images, dim=0)
+            out = scheduler.step(model_output=eps, timestep=t, sample=latents)
+            latents= out.prev_sample
+
+    # images = decoder(latents).clamp(-1,1).add(1).div(2)
+    latents = latents * 2.4868746 # Funky number hack lol
+    images  = decoder(latents).clamp(-1,1).add(1).div(2)
+
+    out_file = None
 
     if save:
         os.makedirs(save_path, exist_ok=True)
         out_file = os.path.join(save_path, f'epoch_{epoch+1:04d}.png')
 
-    tensor_image_grid(all_images, prompts=prompts, save=save, save_path=out_file)
+    tensor_image_grid(images, title=f"Epoch {epoch+1}", prompts=prompts, save=save, save_path=out_file)
+
 
 
 @torch.no_grad()
