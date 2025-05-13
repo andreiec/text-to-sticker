@@ -1,13 +1,13 @@
 #!/bin/bash
 
-MODEL_NAME="vae-b-2.2"
+MODEL_NAME="vae-b-3.3"
 DATA_JSON="data/emoji_dataset_128x128/emoji_dataset.json"
 IMAGE_SIZE=128
 BATCH_SIZE=32
-EPOCHS=70
+EPOCHS=120
 LR=1e-4
 AUGMENT=false
-BETA_MAX=1e-5
+BETA_MAX=1e-2
 BETA_STRATEGY="sigmoid" # or linear
 BETA_MID=20
 BETA_STEEPNESS=0.25
@@ -15,13 +15,13 @@ WARMUP_STEPS=100
 CHECKPOINT_PATH="checkpoints/vae"
 CHECKPOINT_NAME=""
 LOG_DIR="logs"
-LOG_SAMPLES=true
+LOG_SAMPLES=false
 LOG_RECONS=true
 RESUME=false
 SEED=42
 
 
-CMD="/opt/conda/envs/py_3.10/bin/python /workspace/training/training_vae.py \
+CMD="/venv/main/bin/python /workspace/text-to-emoji/training/training_vae.py \
   --model_name ${MODEL_NAME} \
   --data_json ${DATA_JSON} \
   --image_size ${IMAGE_SIZE} \

@@ -151,13 +151,17 @@ def log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=Fa
 
 
 @torch.no_grad()
-def sample_from_vae(decoder, device, num_samples=8, save=False, save_path=''):
+def sample_from_vae(encoder, decoder, latent_shape, device, num_samples=8, save=False, save_path=''):
     if save and save_path == '':
         raise ValueError('Invalid save path')
 
+    C, H, W = latent_shape
+
+    latents = torch.randn(num_samples, C, H, W, device=device) * (1.0 / 0.41)
+
     decoder.eval()
-    latents = torch.randn(num_samples, 4, 32, 32).to(device)
-    images = decoder(latents)
+    images = decoder(latents).clamp(-1, 1)
+
     tensor_image_grid(images, title='Random VAE Samples', save=save, save_path=save_path)
 
 

@@ -56,6 +56,7 @@ def train(
     decoder,
     dataloader,
     optimizer,
+    latent_shape,
     device,
     beta_scheduler,
     lr_scheduler=None,
@@ -66,12 +67,13 @@ def train(
 
     scaler = GradScaler()
     total_steps = len(dataloader)
+    latent_dims = latent_shape[0] * latent_shape[1] * latent_shape[2]
+    print(latent_dims)
     
-    c_max = 10
+    c_max = 400
     c_warm = 10
 
     for epoch in range(start_epoch, args.epochs):
-        # beta = beta_scheduler(epoch)
         beta = args.beta_max
         capacity = c_max * min(1.0, (epoch + 1) / c_warm)
         epoch_loss = epoch_recon = epoch_kl = 0.0
@@ -89,7 +91,7 @@ def train(
                 recon_loss = compute_recon_loss(images, recons)
                 kl_loss = kl_divergence(mu, logvar)
                 kl_residual = torch.clamp(kl_loss - capacity, min=0.0)
-                # loss = recon_loss + beta * kl_loss
+
                 loss = recon_loss + beta * kl_residual
 
             optimizer.zero_grad()
@@ -114,7 +116,7 @@ def train(
                 'kl': f"{kl_loss:.6f}",
                 'C*': f"{capacity:.2f}",
                 'beta': f"{beta:.1e}",
-                'nats/d': f"{kl_loss.item() / 4096:.4e}",
+                'nats/d': f"{kl_loss.item() / latent_dims:.4e}",
                 'lr': f"{optimizer.param_groups[0]['lr']:.2e}" if lr_scheduler else 'NA'
             })
 
@@ -126,7 +128,7 @@ def train(
             'loss': avg_loss,
             'recon': avg_recon,
             'kl': avg_kl,
-            'nats/dim': kl_loss.item() / 4096,
+            'nats/dim': kl_loss.item() / latent_dims,
             'beta': beta,
             'lr': optimizer.param_groups[0]['lr']
         }
@@ -141,14 +143,14 @@ def train(
         os.makedirs(ckpt_dir, exist_ok=True)
 
         if args.log_samples:
-            sample_from_vae(decoder, device, num_samples=8, save=True, save_path=os.path.join(sample_dir, f"epoch_{epoch+1:04d}.png"))
+            sample_from_vae(encoder, decoder, latent_shape, device, num_samples=8, save=True, save_path=os.path.join(sample_dir, f"epoch_{epoch+1:04d}.png"))
 
         if args.log_recons:
             log_reconstructions_vae(encoder, decoder, dataloader, device, epoch, save=True, save_path=recon_dir)
 
-        if (epoch+1) % 5 == 0 or (epoch+1) == args.epochs:
+        if (epoch+1) % 10 == 0 or (epoch+1) == args.epochs:
             ckpt_path = os.path.join(ckpt_dir, f"vae_epoch_{epoch+1:04d}.pth")
-            save_checkpoint({'encoder': encoder, 'decoder': decoder}, optimizer, epoch, ckpt_path, vae_only=True)
+            save_checkpoint({'encoder': encoder, 'decoder': decoder}, optimizer, scaler, epoch, ckpt_path, vae_only=True)
 
     print('Training complete.')
 
@@ -166,6 +168,13 @@ def main():
 
     encoder = VAE_Encoder().to(device)
     decoder = VAE_Decoder().to(device)
+
+    with torch.no_grad():
+        dummy = torch.zeros(1, 3, 128, 128, device=device)
+        mu_dummy, _ = encoder(dummy)
+
+    latent_c, latent_h, latent_w = mu_dummy.shape[1:]
+    latent_shape = (latent_c, latent_h, latent_w)
 
     project_root = Path(__file__).resolve().parents[1]
     data_json = project_root / args.data_json
@@ -199,6 +208,7 @@ def main():
         decoder,
         dataloader,
         optimizer,
+        latent_shape,
         device,
         beta_scheduler,
         lr_scheduler,
