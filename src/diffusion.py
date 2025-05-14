@@ -9,7 +9,6 @@ class TimeEmbedding(nn.Module):
     def __init__(self, d_embed):
         super().__init__()
         self.linear_1 = nn.Linear(d_embed, d_embed * 4)
-        #self.linear_2 = nn.Linear(d_embed * 4, d_embed)
         self.linear_2 = nn.Linear(d_embed * 4, 1280)
 
     def forward(self, x):
@@ -211,14 +210,12 @@ class UNET_Output(nn.Module):
 class Diffusion(nn.Module):
     def __init__(self):
         super().__init__()
-        #self.time_embedding = TimeEmbedding(320)
         self.time_embed = nn.Embedding(1000, 320)
         self.time_mlp = TimeEmbedding(320)
         self.unet = UNET()
         self.final = UNET_Output(320, 4)
     
     def forward(self, latent, context, time):
-        #time = self.time_embedding(time)
         time = self.time_embed(time)
         time = self.time_mlp(time)
         x = self.unet(latent, context, time)

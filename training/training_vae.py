@@ -68,14 +68,9 @@ def train(
     scaler = GradScaler()
     total_steps = len(dataloader)
     latent_dims = latent_shape[0] * latent_shape[1] * latent_shape[2]
-    print(latent_dims)
-    
-    c_max = 400
-    c_warm = 10
 
     for epoch in range(start_epoch, args.epochs):
         beta = args.beta_max
-        capacity = c_max * min(1.0, (epoch + 1) / c_warm)
         epoch_loss = epoch_recon = epoch_kl = 0.0
 
         pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{args.epochs}", ncols=160)
@@ -90,9 +85,7 @@ def train(
 
                 recon_loss = compute_recon_loss(images, recons)
                 kl_loss = kl_divergence(mu, logvar)
-                kl_residual = torch.clamp(kl_loss - capacity, min=0.0)
-
-                loss = recon_loss + beta * kl_residual
+                loss = recon_loss + beta * kl_loss
 
             optimizer.zero_grad()
             scaler.scale(loss).backward()
@@ -114,7 +107,6 @@ def train(
                 'loss': f"{loss:.6f}",
                 'recon': f"{recon_loss:.6f}",
                 'kl': f"{kl_loss:.6f}",
-                'C*': f"{capacity:.2f}",
                 'beta': f"{beta:.1e}",
                 'nats/d': f"{kl_loss.item() / latent_dims:.4e}",
                 'lr': f"{optimizer.param_groups[0]['lr']:.2e}" if lr_scheduler else 'NA'

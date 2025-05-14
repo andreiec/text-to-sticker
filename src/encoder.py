@@ -33,8 +33,8 @@ class VAE_Encoder(nn.Sequential):
 
             nn.SiLU(),
 
-            nn.Conv2d(128, 4, kernel_size=3, padding=1),
-            nn.Conv2d(4, 4, kernel_size=1, padding=0),
+            nn.Conv2d(128, 8, kernel_size=3, padding=1),
+            nn.Conv2d(8, 8, kernel_size=1, padding=0),
         )
 
     def forward(self, x):

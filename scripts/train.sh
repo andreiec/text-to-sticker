@@ -1,26 +1,26 @@
 #!/bin/bash
 
-MODEL_NAME="diffusion-1.7"
-VAE_CKPT="checkpoints/vae/vae-b-2.2/vae_epoch_0070.pth"
+MODEL_NAME="diffusion-1.8"
+VAE_CKPT="checkpoints/vae/vae-b-3.6/vae_epoch_0100.pth"
 DIFFUSION_CKPT="checkpoints/diffusion/diffusion-1.7/epoch_0030.pth"
-EPOCHS=60
-BATCH_SIZE=8
+EPOCHS=200
+BATCH_SIZE=16
 LR=1e-5
 LR_SCHEDULER="cosine"
-WARMUP_STEPS=300
+WARMUP_STEPS=500
 NUM_TRAIN_STEPS=1000
-NUM_INFER_STEPS=30
+NUM_INFER_STEPS=100
 AUGMENT=false
 RECON_LOSS_WEIGHT=0.0
 FREEZE_VAE=true
 FINETUNE_TEXT=false
 LOG_SAMPLES=true
 LOG_RECONS=true
-RESUME=true
+RESUME=false
 SEED=42
 
 
-CMD="/opt/conda/envs/py_3.10/bin/python /workspace/training/training.py \
+CMD="/venv/main/bin/python /workspace/text-to-emoji/training/training.py \
   --model_name ${MODEL_NAME} \
   --vae_ckpt ${VAE_CKPT} \
   --epochs ${EPOCHS} \

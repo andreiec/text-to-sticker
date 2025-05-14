@@ -101,7 +101,7 @@ def train(
 
             with autocast(device_type=device.type):
                 mu, _ = encoder(images)
-                latents = mu / 2.4868746 # Funky number hack
+                latents = mu * 0.24652 # Funky number hack
 
                 bsz = latents.size(0)
                 timesteps = train_scheduler.sample_train_timesteps(bsz, device)
@@ -116,7 +116,7 @@ def train(
                     recon_images = recon_images.clamp(-1, 1)
 
                 recon_loss = F.mse_loss(recon_images, images)
-                loss = diffusion_loss + args.recon_loss_weight * recon_loss
+                loss = diffusion_loss # + args.recon_loss_weight * recon_loss
 
             total_loss += loss
             total_diffusion += diffusion_loss
@@ -152,7 +152,7 @@ def train(
 
         log_metrics(metrics, log_path=f"logs/diffusion/{model_name}.txt", epoch=epoch+1)
 
-        if (epoch + 1) % 5 == 0 or (epoch + 1 == args.epochs):
+        if (epoch + 1) % 20 == 0 or (epoch + 1 == args.epochs):
             if args.log_samples:
                 sample_and_log(
                     diffusion=diffusion,
@@ -249,6 +249,11 @@ def main():
         start_epoch = load_checkpoint(models, optimizer, scaler, args.diffusion_ckpt) + 1
         print(f"Resumed from epoch {start_epoch}.")
 
+        for pg in optimizer.param_groups:
+            if 'initial_lr' not in pg:
+                pg['initial_lr'] = pg.get('lr', args.lr)
+
+
     total_steps = args.epochs * len(dataloader)
 
     lr_scheduler = create_scheduler(
@@ -256,7 +261,7 @@ def main():
         args.lr_scheduler,
         args.warmup_steps,
         total_steps,
-        start_epoch=start_epoch * len(dataloader)
+        start_epoch=start_epoch * len(dataloader) if args.resume else -1
     )
 
     train(

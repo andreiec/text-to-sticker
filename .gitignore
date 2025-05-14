@@ -1,5 +1,9 @@
 # Data
 data/emoji_dataset_*
+data/sticker_dataset_*
+
+# Temp
+temp/
 
 # Logs
 logs/

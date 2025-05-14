@@ -1,20 +1,20 @@
 #!/bin/bash
 
-MODEL_NAME="vae-b-3.3"
+MODEL_NAME="vae-b-3.6"
 DATA_JSON="data/emoji_dataset_128x128/emoji_dataset.json"
 IMAGE_SIZE=128
 BATCH_SIZE=32
-EPOCHS=120
+EPOCHS=100
 LR=1e-4
 AUGMENT=false
-BETA_MAX=1e-2
+BETA_MAX=1e-5
 BETA_STRATEGY="sigmoid" # or linear
 BETA_MID=20
 BETA_STEEPNESS=0.25
 WARMUP_STEPS=100
 CHECKPOINT_PATH="checkpoints/vae"
 CHECKPOINT_NAME=""
-LOG_DIR="logs"
+LOG_DIR="logs/vae"
 LOG_SAMPLES=false
 LOG_RECONS=true
 RESUME=false

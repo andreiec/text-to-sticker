@@ -46,7 +46,7 @@ def sample_and_log(
     diffusion, decoder, tokenizer, text_encoder,
     scheduler, device, epoch: int,
     save: bool = False, save_path: str = "",
-    guidance_scale: float = 2.5,
+    guidance_scale: float = 7.5,
     seed: int = None
 ):
     if save and not save_path:
@@ -72,7 +72,7 @@ def sample_and_log(
         else:
             generator = None
 
-        latents = torch.randn(B, 4, 32, 32, device=device, generator=generator)
+        latents = torch.randn(B, 4, 16, 16, device=device, generator=generator)
 
         for idx, t in enumerate(scheduler.timesteps):
             t_int = int(t)
@@ -87,8 +87,7 @@ def sample_and_log(
             out = scheduler.step(model_output=eps, timestep=t, sample=latents)
             latents= out.prev_sample
 
-    # images = decoder(latents).clamp(-1,1).add(1).div(2)
-    latents = latents * 2.4868746 # Funky number hack lol
+    latents = latents / 0.24652 # Funky number hack lol
     images  = decoder(latents).clamp(-1,1).add(1).div(2)
 
     out_file = None
