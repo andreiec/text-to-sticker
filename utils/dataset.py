@@ -86,3 +86,60 @@ class EmojiDataset(Dataset):
 
         return sample
 
+
+class StickerDataset(Dataset):
+    def __init__(self, json_path, image_dir=None, image_size=128, tokenize=True, tokenizer=None, max_length=77, augment=False):
+        self.json_path = Path(json_path)
+        self.tokenize = tokenize
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+        with open(self.json_path, 'r', encoding='utf-8') as f:
+            self.data = json.load(f)
+
+        self.image_dir = Path(image_dir) if image_dir else self.json_path.parent
+
+        aug = []
+        if augment:
+            aug += [
+                T.RandomHorizontalFlip(p=0.5),
+                T.RandomRotation(10, fill=255),
+            ]
+
+        self.transform = T.Compose([
+            *aug,
+            T.Resize((image_size, image_size)),
+            T.ToTensor(),
+            transforms.Normalize([0.5], [0.5])
+        ])
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        item = self.data[idx]
+        image_path = self.image_dir / item['uuid']
+
+        description = item.get('description', '')
+
+        image = Image.open(image_path).convert('RGBA').convert('RGB')
+        image = self.transform(image)
+
+        sample = {'image': image}
+
+        if self.tokenize:
+            if not self.tokenizer:
+                raise ValueError('No tokenizer specified')
+
+            tokens = self.tokenizer(
+                description,
+                padding="max_length",
+                max_length=self.max_length,
+                truncation=True,
+                return_tensors="pt"
+            )["input_ids"].squeeze(0)
+
+            sample['tokens'] = tokens
+            sample['description'] = description
+
+        return sample

@@ -1,9 +1,10 @@
 #!/bin/bash
 
-MODEL_NAME="vae-b-3.6"
-DATA_JSON="data/emoji_dataset_128x128/emoji_dataset.json"
+MODEL_NAME="vae-o1.0"
+DATA_JSON="data/sticker_dataset_128x128/sticker_dataset.json"
+IMAGE_DIR="data/sticker_dataset_128x128/images"
 IMAGE_SIZE=128
-BATCH_SIZE=32
+BATCH_SIZE=256
 EPOCHS=100
 LR=1e-4
 AUGMENT=false
@@ -24,6 +25,7 @@ SEED=42
 CMD="/venv/main/bin/python /workspace/text-to-emoji/training/training_vae.py \
   --model_name ${MODEL_NAME} \
   --data_json ${DATA_JSON} \
+  --image_dir ${IMAGE_DIR} \
   --image_size ${IMAGE_SIZE} \
   --batch_size ${BATCH_SIZE} \
   --epochs ${EPOCHS} \
