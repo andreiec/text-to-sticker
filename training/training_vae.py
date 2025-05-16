@@ -173,7 +173,6 @@ def main():
     data_json = project_root / args.data_json
     image_dir = project_root / args.image_dir
 
-    #dataset = EmojiDataset(data_json, image_size=args.image_size, tokenize=False, augment=args.augment)
     dataset = StickerDataset(data_json, image_dir, image_size=args.image_size, tokenize=False, augment=args.augment)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
 

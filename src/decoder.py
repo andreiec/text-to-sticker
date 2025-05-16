@@ -85,9 +85,6 @@ class VAE_Decoder(nn.Sequential):
             VAE_ResidualBlock(32, 32),
             VAE_ResidualBlock(32, 32),
 
-            nn.Upsample(scale_factor=2, mode='nearest'),
-            nn.Conv2d(32, 32, kernel_size=3, padding=1),
-
             nn.GroupNorm(32, 32),
 
             nn.SiLU(),

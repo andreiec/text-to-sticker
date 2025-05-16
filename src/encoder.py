@@ -27,8 +27,6 @@ class VAE_Encoder(nn.Sequential):
             VAE_AttentionBlock(128),
             VAE_ResidualBlock(128, 128),
 
-            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=0),
-
             nn.GroupNorm(32, 128),
 
             nn.SiLU(),
