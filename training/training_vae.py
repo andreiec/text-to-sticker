@@ -29,8 +29,8 @@ from utils.utils import compute_recon_loss, kl_divergence, load_checkpoint, log_
 def parse_args():
     parser = argparse.ArgumentParser(description='Train a VAE on emoji dataset')
     parser.add_argument('--model_name', type=str, default='vae-1.0')
-    parser.add_argument('--data_json', type=str, default='data/sticker_dataset_128x128/emoji_dataset.json', help='Path to dataset JSON')
-    parser.add_argument('--image_dir', type=str, default='data/sticker_dataset_128x128/images', help='Path to dataset JSON')
+    parser.add_argument('--data_json', type=str, default='data/sticker_dataset_128x128/dataset.json', help='Path to dataset JSON')
+    parser.add_argument('--image_dir', type=str, default='data/sticker_dataset_128x128/images', help='Path to dataset images')
     parser.add_argument('--image_size', type=int, default=128)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--epochs', type=int, default=70)
@@ -169,11 +169,11 @@ def main():
     latent_c, latent_h, latent_w = mu_dummy.shape[1:]
     latent_shape = (latent_c, latent_h, latent_w)
 
-    project_root = Path(__file__).resolve().parents[1]
     data_json = project_root / args.data_json
     image_dir = project_root / args.image_dir
+    blacklist = project_root / args.blacklist
 
-    dataset = StickerDataset(data_json, image_dir, image_size=args.image_size, tokenize=False, augment=args.augment)
+    dataset = StickerDataset(data_json, image_dir, image_size=args.image_size, tokenize=False, augment=args.augment, blacklist=blacklist)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
 
     optimizer = torch.optim.AdamW(

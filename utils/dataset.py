@@ -88,7 +88,7 @@ class EmojiDataset(Dataset):
 
 
 class StickerDataset(Dataset):
-    def __init__(self, json_path, image_dir=None, image_size=128, tokenize=True, tokenizer=None, max_length=77, augment=False):
+    def __init__(self, json_path, image_dir=None, image_size=128, tokenize=True, tokenizer=None, max_length=77, augment=False, blacklist=None):
         self.json_path = Path(json_path)
         self.tokenize = tokenize
         self.tokenizer = tokenizer
@@ -96,6 +96,10 @@ class StickerDataset(Dataset):
 
         with open(self.json_path, 'r', encoding='utf-8') as f:
             self.data = json.load(f)
+
+        if blacklist is not None:
+            data = [item for item in data if item['uuid'] not in blacklist]
+            self.data = data
 
         self.image_dir = Path(image_dir) if image_dir else self.json_path.parent
 

@@ -25,31 +25,35 @@ from src.ddpm import DDPMSampler
 from src.encoder import VAE_Encoder
 from src.decoder import VAE_Decoder
 from src.diffusion import Diffusion
-from utils.dataset import EmojiDataset
+from utils.dataset import StickerDataset
 from utils.visualisation import log_reconstructions, sample_and_log
 from utils.utils import create_scheduler, load_checkpoint, log_metrics, save_checkpoint
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train UNet for emoji diffusion")
-    parser.add_argument("--model_name", type=str, default="diffusion-1.0")
-    parser.add_argument("--vae_ckpt", type=str, default="checkpoints/vae-b/b-sigmoid-3/vae_epoch_0070.pth")
-    parser.add_argument("--diffusion_ckpt", type=str, default=None)
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--lr_scheduler", type=str, default="constant", choices=["cosine", "constant", "linear"], help="Type of learning rate scheduler")
-    parser.add_argument("--warmup_steps", type=int, default=500)
-    parser.add_argument("--num_train_steps", type=int, default=1000)
-    parser.add_argument("--num_infer_steps", type=int, default=50)
+    parser = argparse.ArgumentParser(description='Train UNet for emoji diffusion')
+    parser.add_argument('--model_name', type=str, default='diffusion-1.0')
+    parser.add_argument('--data_json', type=str, default='data/sticker_dataset_128x128/dataset.json', help='Path to dataset JSON')
+    parser.add_argument('--image_dir', type=str, default='data/sticker_dataset_128x128/images', help='Path to dataset images')
+    parser.add_argument('--blacklist', type=str, default='data/sticker_dataset_128x128/blacklist.txt', help='Path to dataset blacklist')
+    parser.add_argument('--image_size', type=int, default=128)
+    parser.add_argument('--epochs', type=int, default=10)
+    parser.add_argument('--batch_size', type=int, default=8)
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr_scheduler', type=str, default="constant", choices=['cosine', 'constant', 'linear'], help='Type of learning rate scheduler')
+    parser.add_argument('--warmup_steps', type=int, default=500)
+    parser.add_argument('--num_train_steps', type=int, default=1000)
+    parser.add_argument('--num_infer_steps', type=int, default=50)
     parser.add_argument('--augment', action='store_true', help='Enable data augmentation')
-    parser.add_argument("--recon_loss_weight", type=float, default=1.0)
-    parser.add_argument("--freeze_vae", action="store_true")
-    parser.add_argument("--finetune_text", action="store_true")
+    parser.add_argument('--recon_loss_weight', type=float, default=1.0)
+    parser.add_argument('--freeze_vae', action="store_true")
+    parser.add_argument('--finetune_text', action="store_true")
     parser.add_argument('--log_samples', action='store_true', help='Sample diffusion every 5 epochs')
     parser.add_argument('--log_recons', action='store_true', help='Plot reconstructions')
-    parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument('--vae_ckpt', type=str, default='')
+    parser.add_argument('--diffusion_ckpt', type=str, default='')
+    parser.add_argument('--resume', action='store_true')
+    parser.add_argument('--seed', type=int, default=42)
     return parser.parse_args()
 
 
@@ -101,7 +105,7 @@ def train(
 
             with autocast(device_type=device.type):
                 mu, _ = encoder(images)
-                latents = mu * 0.24652 # Funky number hack
+                latents = mu * 0.54460 # Funky number hack
 
                 bsz = latents.size(0)
                 timesteps = train_scheduler.sample_train_timesteps(bsz, device)
@@ -152,7 +156,7 @@ def train(
 
         log_metrics(metrics, log_path=f"logs/diffusion/{model_name}.txt", epoch=epoch+1)
 
-        if (epoch + 1) % 20 == 0 or (epoch + 1 == args.epochs):
+        if (epoch + 1) % 10 == 0 or (epoch + 1 == args.epochs):
             if args.log_samples:
                 sample_and_log(
                     diffusion=diffusion,
@@ -177,7 +181,8 @@ def train(
                     save=True,
                     save_path=f"samples/diffusion/{model_name}/vae_recon"
                 )
-
+        
+        if (epoch + 1) % 20 == 0 or (epoch + 1 == args.epochs):
             ckpt_path = f"checkpoints/diffusion/{model_name}/epoch_{epoch+1:04d}.pth"
             save_checkpoint(models, optimizer, scaler, epoch, ckpt_path)
 
@@ -216,8 +221,11 @@ def main():
     if not args.finetune_text:
         for p in text_encoder.parameters(): p.requires_grad = False
 
-
-    dataset = EmojiDataset(project_root / 'data' / 'emoji_dataset_128x128' / 'emoji_dataset.json', image_size=128, tokenizer=tokenizer)
+    data_json = project_root / args.data_json
+    image_dir = project_root / args.image_dir
+    blacklist = project_root / args.blacklist
+    
+    dataset = StickerDataset(data_json, image_dir, image_size=args.image_size, tokenizer=tokenizer, blacklist=blacklist)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=4, pin_memory=True)
 
     generator = torch.Generator(device=device)

@@ -56,7 +56,7 @@ def sample_and_log(
     decoder.eval()
     text_encoder.eval()
 
-    prompts = ['happy cat', 'crying face', 'robot with heart eyes', 'surprised ghost']
+    prompts = ['a happy cat', 'a cartoon character with red hat', 'a robot dancing', 'a cartoon of a dog laughing']
     B = len(prompts)
 
     token_ids = tokenizer(prompts, return_tensors="pt", padding="max_length", max_length=77, truncation=True).input_ids.to(device)
@@ -87,7 +87,7 @@ def sample_and_log(
             out = scheduler.step(model_output=eps, timestep=t, sample=latents)
             latents= out.prev_sample
 
-    latents = latents / 0.24652 # Funky number hack lol
+    latents = latents / 0.54460 # Funky number hack lol
     images  = decoder(latents).clamp(-1,1).add(1).div(2)
 
     out_file = None

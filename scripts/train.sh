@@ -1,10 +1,12 @@
 #!/bin/bash
 
-MODEL_NAME="diffusion-1.8"
-VAE_CKPT="checkpoints/vae/vae-b-3.6/vae_epoch_0100.pth"
-DIFFUSION_CKPT="checkpoints/diffusion/diffusion-1.7/epoch_0030.pth"
-EPOCHS=200
-BATCH_SIZE=16
+MODEL_NAME="diffusion-o2.1"
+DATA_JSON="data/sticker_dataset_128x128/dataset.json"
+IMAGE_DIR="data/sticker_dataset_128x128/images"
+BLACKLIST="data/sticker_dataset_128x128/blacklist.txt"
+IMAGE_SIZE=128
+BATCH_SIZE=32
+EPOCHS=80
 LR=1e-5
 LR_SCHEDULER="cosine"
 WARMUP_STEPS=500
@@ -16,6 +18,8 @@ FREEZE_VAE=true
 FINETUNE_TEXT=false
 LOG_SAMPLES=true
 LOG_RECONS=true
+VAE_CKPT="checkpoints/vae/vae-o1.1/vae_epoch_0100.pth"
+DIFFUSION_CKPT="checkpoints/diffusion/diffusion-1.7/epoch_0030.pth"
 RESUME=false
 SEED=42
 
@@ -23,8 +27,12 @@ SEED=42
 CMD="/venv/main/bin/python /workspace/text-to-emoji/training/training.py \
   --model_name ${MODEL_NAME} \
   --vae_ckpt ${VAE_CKPT} \
-  --epochs ${EPOCHS} \
+  --data_json ${DATA_JSON} \
+  --image_dir ${IMAGE_DIR} \
+  --blacklist ${BLACKLIST} \
+  --image_size ${IMAGE_SIZE} \
   --batch_size ${BATCH_SIZE} \
+  --epochs ${EPOCHS} \
   --lr ${LR} \
   --lr_scheduler ${LR_SCHEDULER} \
   --warmup_steps ${WARMUP_STEPS} \
