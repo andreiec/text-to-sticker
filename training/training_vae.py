@@ -31,6 +31,7 @@ def parse_args():
     parser.add_argument('--model_name', type=str, default='vae-1.0')
     parser.add_argument('--data_json', type=str, default='data/sticker_dataset_128x128/dataset.json', help='Path to dataset JSON')
     parser.add_argument('--image_dir', type=str, default='data/sticker_dataset_128x128/images', help='Path to dataset images')
+    parser.add_argument('--blacklist', type=str, default='data/sticker_dataset_128x128/blacklist.txt', help='Path to dataset blacklist')
     parser.add_argument('--image_size', type=int, default=128)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--epochs', type=int, default=70)
@@ -174,7 +175,7 @@ def main():
     blacklist = project_root / args.blacklist
 
     dataset = StickerDataset(data_json, image_dir, image_size=args.image_size, tokenize=False, augment=args.augment, blacklist=blacklist)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, num_workers=4, pin_memory=True)
 
     optimizer = torch.optim.AdamW(
         list(encoder.parameters()) + list(decoder.parameters()), lr=args.lr

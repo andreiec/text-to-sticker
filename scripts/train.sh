@@ -1,6 +1,6 @@
 #!/bin/bash
 
-MODEL_NAME="diffusion-o2.1"
+MODEL_NAME="diffusion-1.0"
 DATA_JSON="data/sticker_dataset_128x128/dataset.json"
 IMAGE_DIR="data/sticker_dataset_128x128/images"
 BLACKLIST="data/sticker_dataset_128x128/blacklist.txt"
@@ -18,7 +18,7 @@ FREEZE_VAE=true
 FINETUNE_TEXT=false
 LOG_SAMPLES=true
 LOG_RECONS=true
-VAE_CKPT="checkpoints/vae/vae-o1.1/vae_epoch_0100.pth"
+VAE_CKPT="checkpoints/vae/vae-1.0/vae_epoch_0100.pth"
 DIFFUSION_CKPT="checkpoints/diffusion/diffusion-1.7/epoch_0030.pth"
 RESUME=false
 SEED=42

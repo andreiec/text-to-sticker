@@ -105,7 +105,7 @@ def train(
 
             with autocast(device_type=device.type):
                 mu, _ = encoder(images)
-                latents = mu * 0.54460 # Funky number hack
+                latents = mu * 0.52910 # Funky number hack
 
                 bsz = latents.size(0)
                 timesteps = train_scheduler.sample_train_timesteps(bsz, device)

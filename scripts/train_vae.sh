@@ -1,6 +1,6 @@
 #!/bin/bash
 
-MODEL_NAME="vae-o1.1"
+MODEL_NAME="vae-1.0"
 DATA_JSON="data/sticker_dataset_128x128/dataset.json"
 IMAGE_DIR="data/sticker_dataset_128x128/images"
 BLACKLIST="data/sticker_dataset_128x128/blacklist.txt"
@@ -8,12 +8,12 @@ IMAGE_SIZE=128
 BATCH_SIZE=128
 EPOCHS=100
 LR=1e-4
-AUGMENT=false
+AUGMENT=true
 BETA_MAX=1e-5
 BETA_STRATEGY="sigmoid" # or linear
-BETA_MID=20
+BETA_MID=40
 BETA_STEEPNESS=0.25
-WARMUP_STEPS=100
+WARMUP_STEPS=500
 CHECKPOINT_PATH="checkpoints/vae"
 CHECKPOINT_NAME=""
 LOG_DIR="logs/vae"

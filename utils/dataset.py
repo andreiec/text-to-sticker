@@ -94,13 +94,19 @@ class StickerDataset(Dataset):
         self.tokenizer = tokenizer
         self.max_length = max_length
 
+        # Load data
         with open(self.json_path, 'r', encoding='utf-8') as f:
-            self.data = json.load(f)
+            data = json.load(f)
+
+        # Load blacklist
+        if isinstance(blacklist, (str, Path)):
+            with open(blacklist, 'r', encoding='utf-8') as f:
+                blacklist = [line.strip() for line in f if line.strip()]
 
         if blacklist is not None:
             data = [item for item in data if item['uuid'] not in blacklist]
-            self.data = data
-
+        
+        self.data = data
         self.image_dir = Path(image_dir) if image_dir else self.json_path.parent
 
         aug = []
