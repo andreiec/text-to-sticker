@@ -10,13 +10,14 @@ import torch
 
 from torchvision.utils import make_grid, save_image
 from transformers import CLIPTokenizer, CLIPTextModel
+from torch.amp import GradScaler
 from diffusers import EulerDiscreteScheduler, DPMSolverMultistepScheduler
 from typing import Any
 
 from src.encoder import VAE_Encoder
 from src.decoder import VAE_Decoder
 from src.diffusion import Diffusion
-from utils.utils import load_checkpoint
+from utils import load_checkpoint
 
 
 def parse_args():
@@ -73,7 +74,7 @@ def sample_diffusion(
             out = scheduler.step(model_output=eps_pred, timestep=t, sample=latents)
             latents = out.prev_sample
         
-        latents = latents * 2.4868746 # Funky number again
+        latents = latents / 0.52910 # Funky number again
         images = decoder(latents)
 
     images = images.clamp(-1.0, 1.0).add(1.0).div(2.0)
@@ -91,6 +92,7 @@ def main():
     encoder = VAE_Encoder().to(device)
     decoder = VAE_Decoder().to(device)
     diffusion = Diffusion().to(device)
+    scaler = GradScaler()
 
     tokenizer = CLIPTokenizer(
         vocab_file=str(project_root / 'data' / 'tokenizer' / 'vocab.json'),
@@ -110,7 +112,7 @@ def main():
     scheduler = DPMSolverMultistepScheduler(beta_start=0.00085, beta_end=0.0120, beta_schedule="scaled_linear", num_train_timesteps=1000)
     scheduler.set_timesteps(args.steps, device=device)
 
-    load_checkpoint(models, optimizer=None, path=args.ckpt)
+    load_checkpoint(models, optimizer=None, scaler=scaler, path=args.ckpt)
     sample_diffusion(models, scheduler, tokenizer, args.prompts, args.gscale, args.out, args.device)
 
 
