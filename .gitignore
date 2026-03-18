@@ -12,6 +12,7 @@ logs/
 samples/
 !samples/epoch.png
 !samples/README.md
+!samples/diffusion_vis.png
 
 # Model checkpoints
 /checkpoints

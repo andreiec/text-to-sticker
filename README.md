@@ -8,7 +8,7 @@ The model follows the standard latent diffusion recipe: a VAE compresses sticker
 
 The model handles simple, single-subject prompts well. "Happy cat", "sad panda", "woman with eyeglasses" tend to produce clean stickers with bold outlines, flat fills, and white backgrounds. Compositional prompts with multiple attributes degrade, which is expected given the dataset scale and the shallow U-Net.
 
-![Sample stickers](samples/epoch.png)
+![Sample stickers](samples/diffusion_vis.png)
 
 ## Architecture
 
